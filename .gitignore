@@ -1,0 +1,41 @@
+# Claude Code local config
+.claude/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/settings.json
+.vscode/launch.json
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Coverage
+coverage/
+
+# Turbo
+.turbo/
+
+# Docker volumes (if mounted locally)
+docker/postgres/data/
+docker/redis/data/
