@@ -20,9 +20,31 @@ pnpm install
 # Start infrastructure (PostgreSQL + Redis)
 docker compose up -d
 
+# Run database migrations
+pnpm db:migrate
+
+# Seed initial data
+pnpm db:seed
+
 # Start all apps in development mode
 pnpm dev
 ```
+
+## Database Commands
+
+```bash
+pnpm db:migrate        # Apply pending migrations
+pnpm db:rollback       # Roll back the last migration
+pnpm db:seed           # Run seed files (dev seeds only in NODE_ENV=development)
+pnpm db:verify-chain   # Verify audit log hash chain integrity
+```
+
+## Database Roles
+
+- `DATABASE_URL` uses the `kirindesk` superuser. Used for migrations and admin database operations only.
+- `APP_DATABASE_URL` uses the `kirindesk_app` non-superuser role. Used by application/runtime code. RLS policies are enforced on this role.
+- PostgreSQL superusers bypass RLS. Always test RLS behavior with the `kirindesk_app` role.
+- `pnpm db:verify-chain -- platform` currently returns PASS with 0 entries. This verifies the command path works. Full positive hash-chain verification with real audit entries will be covered after AuditLogService is implemented.
 
 ## Project Structure
 

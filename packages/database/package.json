@@ -2,9 +2,26 @@
   "name": "@kirindesk/database",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
+    "migrate": "tsx src/migrate.ts",
+    "rollback": "tsx src/rollback.ts",
+    "seed": "tsx src/seed.ts",
+    "verify-chain": "tsx src/verify-chain.ts",
     "lint": "echo 'no lint configured'",
-    "typecheck": "echo 'no typecheck configured'",
+    "typecheck": "tsc --noEmit",
     "build": "echo 'no build configured'"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

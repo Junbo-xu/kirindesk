@@ -10,6 +10,10 @@
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck"
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @kirindesk/database migrate",
+    "db:rollback": "pnpm --filter @kirindesk/database rollback",
+    "db:seed": "pnpm --filter @kirindesk/database seed",
+    "db:verify-chain": "pnpm --filter @kirindesk/database verify-chain"
   }
 }
