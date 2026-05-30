@@ -4,7 +4,7 @@ import { getPool, closePool } from './client.js';
 const ZERO_HASH = '0'.repeat(64);
 const HASH_VERSION = 1;
 
-function canonicalizeJson(obj: unknown): string {
+export function canonicalizeJson(obj: unknown): string {
   if (obj === null || obj === undefined) return '';
   if (typeof obj !== 'object') return JSON.stringify(obj);
   if (Array.isArray(obj)) {
@@ -38,7 +38,7 @@ interface AuditLogRow {
   created_at: Date;
 }
 
-function computeRowHash(row: AuditLogRow): string {
+export function computeRowHash(row: AuditLogRow): string {
   const parts = [
     String(row.hash_version),
     row.prev_hash,

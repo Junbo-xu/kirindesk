@@ -41,10 +41,23 @@ pnpm db:verify-chain   # Verify audit log hash chain integrity
 
 ## Database Roles
 
-- `DATABASE_URL` uses the `kirindesk` superuser. Used for migrations and admin database operations only.
+- `DATABASE_URL` uses the `kirindesk` superuser. Used for migrations, seeds, and CLI admin scripts only. **The API runtime must NOT use this.**
 - `APP_DATABASE_URL` uses the `kirindesk_app` non-superuser role. Used by application/runtime code. RLS policies are enforced on this role.
 - PostgreSQL superusers bypass RLS. Always test RLS behavior with the `kirindesk_app` role.
-- `pnpm db:verify-chain -- platform` currently returns PASS with 0 entries. This verifies the command path works. Full positive hash-chain verification with real audit entries will be covered after AuditLogService is implemented.
+
+## Authentication
+
+KirinDesk uses dual JWT secrets for tenant/platform isolation:
+
+- `TENANT_JWT_SECRET` — signs and verifies tenant user tokens
+- `PLATFORM_JWT_SECRET` — signs and verifies platform admin tokens
+- Default token expiry is 2h (development). In production, reduce to 15-30 minutes.
+
+Dev credentials (local development only, NOT production accounts):
+- Tenant user: `admin@dev.local` / `dev-password-123` (tenant slug: `dev-tenant`)
+- Platform admin: `platform@dev.local` / `dev-password-123`
+
+These are local dev fixtures created by `pnpm db:seed`. Production platform admins must be created via CLI command.
 
 ## Project Structure
 
