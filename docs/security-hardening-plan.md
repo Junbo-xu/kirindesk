@@ -36,9 +36,36 @@ The plan is grouped into:
   listening, the API queries its own database role over `APP_DATABASE_URL` and
   refuses to start if that role is a superuser. The error message does not
   include the connection string or password.
-- **Phase 0I-C — Audit logs permission hardening (planned, not executed).**
-  Revoking the app role's UPDATE/DELETE on `audit_logs` requires a new migration
-  and must be approved separately before it is created (see L4).
+- **Phase 0I-C — Audit logs permission hardening (implemented).** Migration
+  `023_revoke_audit_log_modify.sql` revokes `UPDATE, DELETE ON audit_logs FROM
+  kirindesk_app`. The app role retains `INSERT` / `SELECT` on `audit_logs`,
+  `USAGE` on `audit_logs_id_seq`, and `UPDATE` on `audit_log_chains` (required by
+  the hash-chain writer). The `no_modify_audit_logs` trigger and all RLS policies
+  are unchanged. Addresses L4.
+
+## Audit Logs Multi-Layer Protection Model
+
+After Phase 0I-C, `audit_logs` is protected against modification by several
+independent layers, observed in this order for the application role:
+
+1. **Privilege layer.** The `kirindesk_app` role has no `UPDATE` / `DELETE`
+   privilege on `audit_logs`. Such a statement is rejected with
+   `permission denied for table audit_logs` before any row is examined.
+2. **RLS layer.** `audit_logs` has `FORCE ROW LEVEL SECURITY` and defines only
+   SELECT and INSERT policies. There is no UPDATE/DELETE policy usable by the app
+   role, so even with the privilege present, an app-role UPDATE/DELETE matches
+   zero rows (affects 0 rows, no row becomes visible to modify).
+3. **Trigger layer (fallback).** `no_modify_audit_logs` raises
+   `audit_logs table is append-only` on any `UPDATE`/`DELETE` that reaches a row.
+   This is the backstop if the privilege or RLS layer is ever loosened. It fires
+   on the superuser/owner path, where RLS is bypassed and rows are visible.
+
+Inherent limitation (L1 / L2): a PostgreSQL **superuser or table owner** can
+disable the trigger and bypass RLS, so none of these layers stop a high-privilege
+credential holder. This is a property of the PostgreSQL permission model, not a
+code defect. The effective defense is therefore operational: production must
+strictly limit who holds `DATABASE_URL`, owner, or superuser credentials, and
+should pursue external hash anchoring / WORM storage (see roadmap).
 
 ## Current Security Controls Already Implemented
 
@@ -190,6 +217,35 @@ The real defenses are operational and architectural, not a single trigger:
 - Migration, runtime, and owner roles should be separated so that day-to-day
   application access cannot perform DDL or disable protections.
 
+## Production Role Naming Caveat
+
+- The local migration `023_revoke_audit_log_modify.sql` hard-codes the role name
+  `kirindesk_app`.
+- If a production environment uses a different application role name, the revoke
+  will not match the real role and the hardening will not take effect. This must
+  be handled in the deployment strategy.
+- Recommended: keep the runtime application role named `kirindesk_app` in
+  production, or provide a controlled deployment script that applies the
+  equivalent `REVOKE UPDATE, DELETE ON audit_logs` against the actual role.
+- Do not hand-edit a migration after it has been applied: the migration runner
+  records a checksum and will refuse to run if an applied file's content changes.
+  To change an applied migration, roll it back first.
+
+## Deployment Security Checklist
+
+To be satisfied before a production deployment:
+
+- [ ] The app container is injected with `APP_DATABASE_URL` only.
+- [ ] The app container is never injected with `DATABASE_URL`.
+- [ ] `DATABASE_URL` is used only for migration / seed / CLI operations.
+- [ ] Production secrets are not stored in the repository.
+- [ ] Production database passwords are not written into migration files.
+- [ ] Runtime / migration / owner database roles are separated.
+- [ ] Superuser is reserved for emergency operations and never enters the
+      day-to-day application environment.
+- [ ] A backup and restore plan (including restore rehearsal) is completed.
+- [ ] Audit data uses, or has a roadmap toward, WORM / external hash anchoring.
+
 ## Auth/RBAC Hardening Checklist
 
 Already implemented and verified:
@@ -204,24 +260,22 @@ Already implemented and verified:
 
 To be hardened:
 
-- [ ] Remove JWT fallback secrets; fail startup if secrets are missing in
-      production (L3).
+- [x] Remove JWT fallback secrets; fail startup if secrets are missing in
+      production (L3). — Done (Phase 0I-A).
 - [ ] Add login throttling / account lockout / anomaly alerting (L8).
 - [ ] Add token refresh / revocation mechanism.
 
 ## Next Recommended Phase
 
-The smallest, safest next execution step is L3 plus the runtime startup
-self-check, because they are code-only changes that do not touch the database
-schema. L4 (revoking app role UPDATE/DELETE on `audit_logs`) requires a new
-migration and must be approved separately before it is created. L6 and the
-credential/role separation work are deployment-process changes.
+Phases 0I-A (L3), 0I-B (startup self-check), and 0I-C (L4 audit log permission
+hardening) are implemented. The remaining work is deployment-process and
+roadmap, not application code:
 
 Recommended sequence:
 
 1. L3 + startup self-check (code only, no schema change). — Done (Phase 0I-A / 0I-B).
 2. L6 + secret management + role separation (deployment process).
-3. L4 (new migration, requires explicit approval).
+3. L4 (new migration). — Done (Phase 0I-C).
 4. Backup / restore plan and rehearsal.
 5. Commercialization-later improvements as the roadmap allows.
 
