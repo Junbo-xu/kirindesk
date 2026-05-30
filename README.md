@@ -44,6 +44,7 @@ pnpm db:verify-chain   # Verify audit log hash chain integrity
 - `DATABASE_URL` uses the `kirindesk` superuser. Used for migrations, seeds, and CLI admin scripts only. **The API runtime must NOT use this.**
 - `APP_DATABASE_URL` uses the `kirindesk_app` non-superuser role. Used by application/runtime code. RLS policies are enforced on this role.
 - PostgreSQL superusers bypass RLS. Always test RLS behavior with the `kirindesk_app` role.
+- The API requires `APP_DATABASE_URL` and performs a startup self-check that rejects a superuser runtime role.
 
 ## Authentication
 

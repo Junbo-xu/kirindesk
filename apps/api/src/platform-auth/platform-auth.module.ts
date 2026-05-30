@@ -6,12 +6,13 @@ import { PlatformAuthService } from './platform-auth.service';
 import { PlatformJwtStrategy } from './platform-jwt.strategy';
 import { PlatformAuthGuard } from './platform-auth.guard';
 import { AuditModule } from '../audit/audit.module';
+import { requireEnv } from '../common/env';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.PLATFORM_JWT_SECRET || 'platform-jwt-fallback-dev',
+      secret: requireEnv('PLATFORM_JWT_SECRET'),
       signOptions: { expiresIn: process.env.PLATFORM_JWT_EXPIRES_IN || '2h' } as any,
     }),
     AuditModule,

@@ -7,12 +7,13 @@ import { TenantJwtStrategy } from './tenant-jwt.strategy';
 import { TenantAuthGuard } from './tenant-auth.guard';
 import { UsersModule } from '../users/users.module';
 import { AuditModule } from '../audit/audit.module';
+import { requireEnv } from '../common/env';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.TENANT_JWT_SECRET || 'tenant-jwt-fallback-dev',
+      secret: requireEnv('TENANT_JWT_SECRET'),
       signOptions: { expiresIn: process.env.TENANT_JWT_EXPIRES_IN || '2h' } as any,
     }),
     UsersModule,

@@ -26,6 +26,20 @@ The plan is grouped into:
 - Requirements that must be completed before any production deployment.
 - Improvements that can be deferred until after commercialization.
 
+## Implementation Status
+
+- **Phase 0I-A — Remove JWT fallback (implemented).** The fallback dev secrets
+  are removed. Both `TENANT_JWT_SECRET` and `PLATFORM_JWT_SECRET` are required
+  via `requireEnv`; the API fails to start if either is missing. Token
+  expiration still defaults to `2h` (expiry is not a secret). Addresses L3.
+- **Phase 0I-B — Runtime DB role self-check (implemented).** On startup, before
+  listening, the API queries its own database role over `APP_DATABASE_URL` and
+  refuses to start if that role is a superuser. The error message does not
+  include the connection string or password.
+- **Phase 0I-C — Audit logs permission hardening (planned, not executed).**
+  Revoking the app role's UPDATE/DELETE on `audit_logs` requires a new migration
+  and must be approved separately before it is created (see L4).
+
 ## Current Security Controls Already Implemented
 
 Verified by direct source inspection during Phase 0G and Phase 0H planning.
@@ -205,7 +219,7 @@ credential/role separation work are deployment-process changes.
 
 Recommended sequence:
 
-1. L3 + startup self-check (code only, no schema change).
+1. L3 + startup self-check (code only, no schema change). — Done (Phase 0I-A / 0I-B).
 2. L6 + secret management + role separation (deployment process).
 3. L4 (new migration, requires explicit approval).
 4. Backup / restore plan and rehearsal.

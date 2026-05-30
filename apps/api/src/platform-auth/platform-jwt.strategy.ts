@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { requireEnv } from '../common/env';
 
 @Injectable()
 export class PlatformJwtStrategy extends PassportStrategy(Strategy, 'platform-jwt') {
@@ -8,7 +9,7 @@ export class PlatformJwtStrategy extends PassportStrategy(Strategy, 'platform-jw
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.PLATFORM_JWT_SECRET || 'platform-jwt-fallback-dev',
+      secretOrKey: requireEnv('PLATFORM_JWT_SECRET'),
     });
   }
 
