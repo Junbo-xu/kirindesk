@@ -15,7 +15,8 @@
     "verify-chain": "tsx src/verify-chain.ts",
     "lint": "echo 'no lint configured'",
     "typecheck": "tsc --noEmit",
-    "build": "echo 'no build configured'"
+    "build": "echo 'no build configured'",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

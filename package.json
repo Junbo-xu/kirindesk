@@ -13,6 +13,8 @@
     "typecheck": "pnpm -r typecheck",
     "format:check": "prettier --check \"apps/api/src/**/*.ts\"",
     "format": "prettier --write \"apps/api/src/**/*.ts\"",
+    "test": "pnpm -r --if-present test:unit",
+    "test:unit": "pnpm -r --if-present test:unit",
     "db:migrate": "pnpm --filter @kirindesk/database migrate",
     "db:rollback": "pnpm --filter @kirindesk/database rollback",
     "db:seed": "pnpm --filter @kirindesk/database seed",
@@ -23,6 +25,7 @@
     "eslint": "^10.4.1",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.3",
-    "typescript-eslint": "^8.60.0"
+    "typescript-eslint": "^8.60.0",
+    "vitest": "^4.1.7"
   }
 }
