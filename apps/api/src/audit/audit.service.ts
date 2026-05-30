@@ -48,7 +48,9 @@ export class AuditService {
     try {
       await client.query('BEGIN');
       await client.query(`SELECT set_config('app.current_actor_type', 'system', true)`);
-      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [params.tenantId ?? '']);
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [
+        params.tenantId ?? '',
+      ]);
 
       const { rows } = await client.query(
         `SELECT last_hash FROM audit_log_chains WHERE chain_key = $1 FOR UPDATE`,
@@ -62,11 +64,21 @@ export class AuditService {
       const createdAt = new Date();
 
       const hashInput = [
-        '1', prevHash, params.tenantId ?? '', params.actorType, params.actorId,
-        params.action, params.resourceType, params.resourceId ?? '',
-        canonicalizeJson(params.before), canonicalizeJson(params.after),
-        canonicalizeJson(params.metadata), params.requestId ?? '',
-        params.ipAddress ?? '', params.userAgent ?? '', params.reason ?? '',
+        '1',
+        prevHash,
+        params.tenantId ?? '',
+        params.actorType,
+        params.actorId,
+        params.action,
+        params.resourceType,
+        params.resourceId ?? '',
+        canonicalizeJson(params.before),
+        canonicalizeJson(params.after),
+        canonicalizeJson(params.metadata),
+        params.requestId ?? '',
+        params.ipAddress ?? '',
+        params.userAgent ?? '',
+        params.reason ?? '',
         createdAt.toISOString(),
       ].join('|');
       const rowHash = createHash('sha256').update(hashInput).digest('hex');
@@ -77,14 +89,22 @@ export class AuditService {
           row_hash, prev_hash, hash_version, created_at)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,$16)`,
         [
-          params.tenantId, params.actorType, params.actorId, params.action,
-          params.resourceType, params.resourceId ?? null,
+          params.tenantId,
+          params.actorType,
+          params.actorId,
+          params.action,
+          params.resourceType,
+          params.resourceId ?? null,
           params.before ? JSON.stringify(params.before) : null,
           params.after ? JSON.stringify(params.after) : null,
           params.metadata ? JSON.stringify(params.metadata) : null,
-          params.requestId ?? null, params.ipAddress ?? null,
-          params.userAgent ?? null, params.reason ?? null,
-          rowHash, prevHash, createdAt,
+          params.requestId ?? null,
+          params.ipAddress ?? null,
+          params.userAgent ?? null,
+          params.reason ?? null,
+          rowHash,
+          prevHash,
+          createdAt,
         ],
       );
 

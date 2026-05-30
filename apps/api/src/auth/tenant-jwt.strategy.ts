@@ -17,6 +17,11 @@ export class TenantJwtStrategy extends PassportStrategy(Strategy, 'tenant-jwt') 
     if (payload.type !== 'tenant_user') {
       return null;
     }
-    return { sub: payload.sub, type: payload.type, tenantId: payload.tenantId, email: payload.email };
+    return {
+      sub: payload.sub,
+      type: payload.type,
+      tenantId: payload.tenantId,
+      email: payload.email,
+    };
   }
 }

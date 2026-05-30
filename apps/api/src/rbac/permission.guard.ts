@@ -13,7 +13,10 @@ export class PermissionGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const requirement = this.reflector.get<PermissionRequirement>(PERMISSION_KEY, context.getHandler());
+    const requirement = this.reflector.get<PermissionRequirement>(
+      PERMISSION_KEY,
+      context.getHandler(),
+    );
     if (!requirement) return true;
 
     const request = context.switchToHttp().getRequest();
@@ -26,16 +29,18 @@ export class PermissionGuard implements CanActivate {
     const result = await this.rbacService.checkPermission(user.sub, user.tenantId, code);
 
     if (!result.allowed) {
-      await this.auditService.log({
-        tenantId: user.tenantId,
-        actorType: 'tenant_user',
-        actorId: user.sub,
-        action: 'rbac:permission_denied',
-        resourceType: 'permission',
-        resourceId: code,
-        ipAddress: request.ip,
-        userAgent: request.headers?.['user-agent'],
-      }).catch(() => {});
+      await this.auditService
+        .log({
+          tenantId: user.tenantId,
+          actorType: 'tenant_user',
+          actorId: user.sub,
+          action: 'rbac:permission_denied',
+          resourceType: 'permission',
+          resourceId: code,
+          ipAddress: request.ip,
+          userAgent: request.headers?.['user-agent'],
+        })
+        .catch(() => {});
       throw new ForbiddenException('Permission denied');
     }
 

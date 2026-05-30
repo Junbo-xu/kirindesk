@@ -17,7 +17,12 @@ export class AuthService {
     private readonly auditService: AuditService,
   ) {}
 
-  async login(email: string, password: string, tenantSlug: string, meta: { ip?: string; ua?: string }) {
+  async login(
+    email: string,
+    password: string,
+    tenantSlug: string,
+    meta: { ip?: string; ua?: string },
+  ) {
     const { rows: tenants } = await this.pool.query(
       `SELECT id FROM tenants WHERE slug = $1 AND status = 'active' AND deleted_at IS NULL`,
       [tenantSlug],
@@ -53,19 +58,37 @@ export class AuthService {
     const accessToken = this.jwtService.sign(payload);
 
     await this.auditService.log({
-      tenantId, actorType: 'tenant_user', actorId: user.id,
-      action: 'auth:login_success', resourceType: 'user', resourceId: user.id,
-      ipAddress: meta.ip, userAgent: meta.ua,
+      tenantId,
+      actorType: 'tenant_user',
+      actorId: user.id,
+      action: 'auth:login_success',
+      resourceType: 'user',
+      resourceId: user.id,
+      ipAddress: meta.ip,
+      userAgent: meta.ua,
     });
 
     return { accessToken, user: { id: user.id, email: user.email, name: user.name, tenantId } };
   }
 
-  private async logFailed(tenantId: string | null, email: string, reason: string, meta: { ip?: string; ua?: string }) {
-    await this.auditService.log({
-      tenantId, actorType: 'tenant_user', actorId: '00000000-0000-0000-0000-000000000000',
-      action: 'auth:login_failed', resourceType: 'user', resourceId: null,
-      metadata: { email, reason }, ipAddress: meta.ip, userAgent: meta.ua,
-    }).catch(() => {});
+  private async logFailed(
+    tenantId: string | null,
+    email: string,
+    reason: string,
+    meta: { ip?: string; ua?: string },
+  ) {
+    await this.auditService
+      .log({
+        tenantId,
+        actorType: 'tenant_user',
+        actorId: '00000000-0000-0000-0000-000000000000',
+        action: 'auth:login_failed',
+        resourceType: 'user',
+        resourceId: null,
+        metadata: { email, reason },
+        ipAddress: meta.ip,
+        userAgent: meta.ua,
+      })
+      .catch(() => {});
   }
 }

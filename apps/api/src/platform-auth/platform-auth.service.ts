@@ -43,19 +43,32 @@ export class PlatformAuthService {
     const accessToken = this.jwtService.sign(payload);
 
     await this.auditService.log({
-      tenantId: null, actorType: 'platform_admin', actorId: admin.id,
-      action: 'auth:login_success', resourceType: 'platform_admin', resourceId: admin.id,
-      ipAddress: meta.ip, userAgent: meta.ua,
+      tenantId: null,
+      actorType: 'platform_admin',
+      actorId: admin.id,
+      action: 'auth:login_success',
+      resourceType: 'platform_admin',
+      resourceId: admin.id,
+      ipAddress: meta.ip,
+      userAgent: meta.ua,
     });
 
     return { accessToken, admin: { id: admin.id, email: admin.email, name: admin.name } };
   }
 
   private async logFailed(email: string, reason: string, meta: { ip?: string; ua?: string }) {
-    await this.auditService.log({
-      tenantId: null, actorType: 'platform_admin', actorId: '00000000-0000-0000-0000-000000000000',
-      action: 'auth:login_failed', resourceType: 'platform_admin', resourceId: null,
-      metadata: { email, reason }, ipAddress: meta.ip, userAgent: meta.ua,
-    }).catch(() => {});
+    await this.auditService
+      .log({
+        tenantId: null,
+        actorType: 'platform_admin',
+        actorId: '00000000-0000-0000-0000-000000000000',
+        action: 'auth:login_failed',
+        resourceType: 'platform_admin',
+        resourceId: null,
+        metadata: { email, reason },
+        ipAddress: meta.ip,
+        userAgent: meta.ua,
+      })
+      .catch(() => {});
   }
 }

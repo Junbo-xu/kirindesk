@@ -29,9 +29,14 @@ export class AuthController {
   @HttpCode(200)
   async logout(@CurrentUser() user: { sub: string; tenantId: string }, @Req() req: Request) {
     await this.auditService.log({
-      tenantId: user.tenantId, actorType: 'tenant_user', actorId: user.sub,
-      action: 'auth:logout', resourceType: 'user', resourceId: user.sub,
-      ipAddress: req.ip, userAgent: req.headers['user-agent'],
+      tenantId: user.tenantId,
+      actorType: 'tenant_user',
+      actorId: user.sub,
+      action: 'auth:logout',
+      resourceType: 'user',
+      resourceId: user.sub,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
     });
     return { message: 'Logged out' };
   }

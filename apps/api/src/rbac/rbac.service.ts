@@ -14,7 +14,11 @@ const SCOPE_PRIORITY: Record<string, number> = { all: 4, assigned: 3, own: 2, no
 export class RbacService {
   constructor(@Inject(APP_POOL) private readonly pool: Pool) {}
 
-  async checkPermission(userId: string, tenantId: string, permissionCode: string): Promise<PermissionCheckResult> {
+  async checkPermission(
+    userId: string,
+    tenantId: string,
+    permissionCode: string,
+  ): Promise<PermissionCheckResult> {
     return withTenantContext(
       this.pool,
       { tenantId, userId, actorType: 'tenant_user' },
@@ -31,7 +35,8 @@ export class RbacService {
         if (rows.length === 0) return { allowed: false, dataScope: 'none' };
 
         const widest = rows.reduce(
-          (best, r) => ((SCOPE_PRIORITY[r.data_scope] || 0) > (SCOPE_PRIORITY[best] || 0) ? r.data_scope : best),
+          (best, r) =>
+            (SCOPE_PRIORITY[r.data_scope] || 0) > (SCOPE_PRIORITY[best] || 0) ? r.data_scope : best,
           'none',
         );
         return { allowed: true, dataScope: widest };
