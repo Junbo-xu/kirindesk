@@ -1,6 +1,11 @@
+import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // SWC transforms the NestJS source, emitting the `design:paramtypes`
+  // decorator metadata that constructor DI relies on. Vitest's default esbuild
+  // transformer drops this metadata, leaving injected providers undefined.
+  plugins: [swc.vite()],
   test: {
     environment: 'node',
     include: ['test/**/*.integration.test.ts'],
