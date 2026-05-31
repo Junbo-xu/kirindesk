@@ -16,6 +16,7 @@
     "test": "pnpm -r --if-present test:unit",
     "test:unit": "pnpm -r --if-present test:unit",
     "test:integration": "pnpm --filter @kirindesk/api test:integration",
+    "test:security": "node scripts/security-regression.mjs",
     "db:migrate": "pnpm --filter @kirindesk/database migrate",
     "db:rollback": "pnpm --filter @kirindesk/database rollback",
     "db:seed": "pnpm --filter @kirindesk/database seed",
