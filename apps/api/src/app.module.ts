@@ -6,6 +6,7 @@ import { PlatformAuthModule } from './platform-auth/platform-auth.module';
 import { UsersModule } from './users/users.module';
 import { RbacModule } from './rbac/rbac.module';
 import { AuditModule } from './audit/audit.module';
+import { CustomersModule } from './customers/customers.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AuditModule } from './audit/audit.module';
     UsersModule,
     RbacModule,
     AuditModule,
+    CustomersModule,
   ],
 })
 export class AppModule {}
