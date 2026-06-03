@@ -79,7 +79,11 @@ export class CustomersController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCustomerDto,
   ) {
-    if (Object.keys(dto).length === 0) {
+    // ValidationPipe(transform) instantiates the DTO with every optional field
+    // present as `undefined` (ES2022 class fields), so Object.keys(dto).length
+    // is never 0. Count fields that actually carry a value instead.
+    const hasUpdate = Object.values(dto).some((v) => v !== undefined);
+    if (!hasUpdate) {
       throw new BadRequestException('At least one updatable field is required');
     }
     return this.customersService.update(this.actor(user, req), id, dto);

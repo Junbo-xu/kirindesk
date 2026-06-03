@@ -34,6 +34,18 @@ function canonicalizeJson(obj: unknown): string {
   return '{' + parts.join(',') + '}';
 }
 
+// Round-trips a value through JSON so the bytes used for the hash are exactly
+// the bytes stored in jsonb. JSON.stringify applies Date#toJSON (-> ISO
+// string), drops undefined object members, etc., giving a stable JSON-safe
+// shape. Returns undefined when there is nothing to store (null/undefined or a
+// value that serializes to nothing), which the caller maps to a SQL NULL.
+function normalizeJsonValue(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  const json = JSON.stringify(value);
+  if (json === undefined) return undefined;
+  return JSON.parse(json);
+}
+
 @Injectable()
 export class AuditService {
   constructor(@Inject(APP_POOL) private readonly pool: Pool) {}
@@ -63,6 +75,17 @@ export class AuditService {
       const prevHash = rows[0].last_hash as string;
       const createdAt = new Date();
 
+      // Normalize before/after/metadata exactly once, then use the SAME value
+      // for both the hash input and the DB insert. The hash and the stored
+      // jsonb must derive from identical bytes, or verifyChain (which re-reads
+      // the stored jsonb) recomputes a different hash. A JSON round-trip also
+      // makes the payload JSON-safe: Date -> ISO string via Date#toJSON, so a
+      // Date in before/after no longer hashes as `{}` at write time and as a
+      // string at verify time.
+      const before = normalizeJsonValue(params.before);
+      const after = normalizeJsonValue(params.after);
+      const metadata = normalizeJsonValue(params.metadata);
+
       const hashInput = [
         '1',
         prevHash,
@@ -72,9 +95,9 @@ export class AuditService {
         params.action,
         params.resourceType,
         params.resourceId ?? '',
-        canonicalizeJson(params.before),
-        canonicalizeJson(params.after),
-        canonicalizeJson(params.metadata),
+        canonicalizeJson(before),
+        canonicalizeJson(after),
+        canonicalizeJson(metadata),
         params.requestId ?? '',
         params.ipAddress ?? '',
         params.userAgent ?? '',
@@ -95,9 +118,9 @@ export class AuditService {
           params.action,
           params.resourceType,
           params.resourceId ?? null,
-          params.before ? JSON.stringify(params.before) : null,
-          params.after ? JSON.stringify(params.after) : null,
-          params.metadata ? JSON.stringify(params.metadata) : null,
+          before === undefined ? null : JSON.stringify(before),
+          after === undefined ? null : JSON.stringify(after),
+          metadata === undefined ? null : JSON.stringify(metadata),
           params.requestId ?? null,
           params.ipAddress ?? null,
           params.userAgent ?? null,
