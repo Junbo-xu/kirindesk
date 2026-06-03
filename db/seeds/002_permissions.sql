@@ -10,6 +10,7 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'orders:update', '编辑订单', 'update'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'orders:approve', '审批订单', 'approve'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'orders:export', '导出订单', 'export'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'orders:delete', '删除订单', 'delete'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000003', 'procurement:view', '查看采购', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000003', 'procurement:create', '创建采购', 'create'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000003', 'procurement:update', '编辑采购', 'update'),
