@@ -25,6 +25,7 @@ export const ZERO_HASH = '0'.repeat(64);
 
 // RBAC fixture identifiers (roles are tenant-scoped).
 const CRM_MODULE_ID = 'a0000000-0000-0000-0000-000000000001';
+const ORDERS_MODULE_ID = 'a0000000-0000-0000-0000-000000000002';
 const ADMIN_ROLE_ID = 'a1111111-1111-1111-1111-111111111111'; // tenant1, scope=all
 const SALES_ROLE_ID = 'a2222222-2222-2222-2222-222222222222'; // tenant1, scope=own
 const T2_ADMIN_ROLE_ID = 'a3333333-3333-3333-3333-333333333333'; // tenant2, scope=all
@@ -36,6 +37,21 @@ export const CUSTOMER_PERMS = [
   'customers:update',
   'customers:delete',
 ] as const;
+
+// The four permissions the sales-orders endpoints require. approve/export are
+// seeded in production but intentionally not granted here (out of phase scope).
+export const ORDER_PERMS = [
+  'orders:view',
+  'orders:create',
+  'orders:update',
+  'orders:delete',
+] as const;
+
+// All permissions granted to each fixture role, with their owning module id.
+const SEED_PERMS: { code: string; moduleId: string }[] = [
+  ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
+  ...ORDER_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+];
 
 interface RoleSpec {
   roleId: string;
@@ -125,16 +141,16 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       [TEST_ADMIN_ID, TEST_ADMIN_EMAIL, passwordHash],
     );
 
-    // --- module + permissions (global, idempotent) ---
+    // --- modules + permissions (global, idempotent) ---
     await client.query(
-      `INSERT INTO modules (id, code, name, sort_order) VALUES ($1, 'crm', '客户管理', 1)
+      `INSERT INTO modules (id, code, name, sort_order) VALUES
+         ($1, 'crm', '客户管理', 1),
+         ($2, 'orders', '订单管理', 2)
        ON CONFLICT (code) DO NOTHING`,
-      [CRM_MODULE_ID],
+      [CRM_MODULE_ID, ORDERS_MODULE_ID],
     );
-    const mod = await client.query(`SELECT id FROM modules WHERE code = 'crm'`);
-    const moduleId = mod.rows[0].id as string;
 
-    for (const code of CUSTOMER_PERMS) {
+    for (const { code, moduleId } of SEED_PERMS) {
       const action = code.split(':')[1];
       await client.query(
         `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
@@ -143,9 +159,10 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    const allCodes = SEED_PERMS.map((p) => p.code);
     const permRes = await client.query<{ id: string; code: string }>(
       `SELECT id, code FROM permissions WHERE code = ANY($1)`,
-      [CUSTOMER_PERMS as unknown as string[]],
+      [allCodes],
     );
     const permId: Record<string, string> = {};
     for (const r of permRes.rows) permId[r.code] = r.id;
@@ -160,7 +177,7 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
         `INSERT INTO user_roles (tenant_id, user_id, role_id) VALUES ($1, $2, $3)`,
         [spec.tenantId, spec.userId, spec.roleId],
       );
-      for (const code of CUSTOMER_PERMS) {
+      for (const code of allCodes) {
         await client.query(
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,
