@@ -8,6 +8,52 @@ export interface LoginResponse {
   accessToken: string;
 }
 
+export type Currency = 'RMB' | 'USD' | 'HKD' | 'EUR';
+export type OrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled';
+
+export interface SalesOrderResponse {
+  id: string;
+  customer_id: string;
+  owner_user_id: string;
+  order_number: string;
+  pi_number: string | null;
+  currency: Currency;
+  total_amount: string;
+  status: OrderStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Paginated<T> {
+  data: T[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface CreateSalesOrderInput {
+  customer_id: string;
+  order_number: string;
+  currency: Currency;
+  total_amount: string;
+  pi_number?: string;
+  status?: OrderStatus;
+  notes?: string;
+}
+
+export interface UpdateSalesOrderInput {
+  pi_number?: string;
+  currency?: Currency;
+  total_amount?: string;
+  status?: OrderStatus;
+  notes?: string;
+}
+
+export interface CustomerOption {
+  id: string;
+  company_name: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

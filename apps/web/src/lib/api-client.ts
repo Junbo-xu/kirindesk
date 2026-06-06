@@ -1,4 +1,13 @@
-import { ApiError, LoginResponse, MeResponse } from './types';
+import {
+  ApiError,
+  CreateSalesOrderInput,
+  CustomerOption,
+  LoginResponse,
+  MeResponse,
+  Paginated,
+  SalesOrderResponse,
+  UpdateSalesOrderInput,
+} from './types';
 
 const TOKEN_KEY = 'kd_access_token';
 
@@ -88,5 +97,55 @@ export const apiClient = {
   },
   logout(): Promise<{ message: string }> {
     return request<{ message: string }>('/api/auth/logout', { method: 'POST' });
+  },
+  listSalesOrders(query: {
+    page?: number;
+    pageSize?: number;
+    q?: string;
+    status?: string;
+    customer_id?: string;
+  }): Promise<Paginated<SalesOrderResponse>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
+    if (query.customer_id) params.set('customer_id', query.customer_id);
+    const qs = params.toString();
+    return request<Paginated<SalesOrderResponse>>(
+      `/api/sales-orders${qs ? `?${qs}` : ''}`,
+    );
+  },
+  getSalesOrder(id: string): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}`);
+  },
+  createSalesOrder(input: CreateSalesOrderInput): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>('/api/sales-orders', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  updateSalesOrder(id: string, input: UpdateSalesOrderInput): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  deleteSalesOrder(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/sales-orders/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  listCustomers(query: {
+    status?: string;
+    pageSize?: number;
+  }): Promise<Paginated<CustomerOption>> {
+    const params = new URLSearchParams();
+    if (query.status) params.set('status', query.status);
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<CustomerOption>>(
+      `/api/customers${qs ? `?${qs}` : ''}`,
+    );
   },
 };
