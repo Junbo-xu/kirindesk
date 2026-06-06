@@ -1,0 +1,92 @@
+import { ApiError, LoginResponse, MeResponse } from './types';
+
+const TOKEN_KEY = 'kd_access_token';
+
+// 401 handler registered by AuthProvider; lets the client trigger logout +
+// redirect without importing React context (avoids a circular dependency).
+let onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+export function setToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  // Login must not send a stale Authorization header or trigger the 401 hook.
+  auth?: boolean;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { method = 'GET', body, auth = true } = options;
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (auth) {
+    const token = getToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 401 && auth) {
+    clearToken();
+    if (onUnauthorized) onUnauthorized();
+    throw new ApiError(401, '登录已过期，请重新登录');
+  }
+
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
+}
+
+// NestJS error bodies look like { statusCode, message, error }, where message
+// is a string or a string[] (field validation). Normalize both shapes.
+async function toApiError(res: Response): Promise<ApiError> {
+  let message = `请求失败 (${res.status})`;
+  let fields: string[] | undefined;
+  try {
+    const data = await res.json();
+    if (Array.isArray(data?.message)) {
+      fields = data.message as string[];
+      message = fields.join('；');
+    } else if (typeof data?.message === 'string') {
+      message = data.message;
+    }
+  } catch {
+    // non-JSON body; keep the default message
+  }
+  return new ApiError(res.status, message, fields);
+}
+
+export const apiClient = {
+  login(email: string, password: string, tenantSlug: string): Promise<LoginResponse> {
+    return request<LoginResponse>('/api/auth/login', {
+      method: 'POST',
+      body: { email, password, tenantSlug },
+      auth: false,
+    });
+  },
+  getMe(): Promise<MeResponse> {
+    return request<MeResponse>('/api/auth/me');
+  },
+  logout(): Promise<{ message: string }> {
+    return request<{ message: string }>('/api/auth/logout', { method: 'POST' });
+  },
+};

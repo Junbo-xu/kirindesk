@@ -1,0 +1,28 @@
+import { Outlet } from 'react-router-dom';
+import { useAuth } from '../auth/AuthContext';
+
+export function AppLayout() {
+  const { user, logout } = useAuth();
+  return (
+    <div style={{ fontFamily: 'system-ui' }}>
+      <header
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: '12px 24px',
+          borderBottom: '1px solid #ddd',
+        }}
+      >
+        <strong>KirinDesk</strong>
+        <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span style={{ color: '#555' }}>{user?.email}</span>
+          <button onClick={() => logout()}>登出</button>
+        </span>
+      </header>
+      <main style={{ padding: 24 }}>
+        <Outlet />
+      </main>
+    </div>
+  );
+}
