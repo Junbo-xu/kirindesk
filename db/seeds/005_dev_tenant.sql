@@ -66,3 +66,34 @@ VALUES (
   NULL,
   repeat('0', 64)
 ) ON CONFLICT (chain_key) DO NOTHING;
+
+-- Dev RBAC: grant admin@dev.local an all-access role so local QA can hit
+-- permission-protected endpoints. is_tenant_owner is NOT consulted by the
+-- PermissionGuard, so the dev user needs explicit role/permission grants.
+INSERT INTO roles (id, tenant_id, name, description, is_system)
+VALUES (
+  '00000000-0000-0000-0000-000000000020',
+  '00000000-0000-0000-0000-000000000001',
+  'Dev Admin',
+  'Dev all-access role (development only)',
+  true
+) ON CONFLICT (tenant_id, name) DO NOTHING;
+
+-- Bind every permission to the Dev Admin role with data_scope 'all'.
+-- permission_id is resolved by subquery because permission ids are random uuids.
+INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+SELECT
+  '00000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000020',
+  p.id,
+  'all'
+FROM permissions p
+ON CONFLICT (tenant_id, role_id, permission_id) DO NOTHING;
+
+-- Assign the Dev Admin role to admin@dev.local (user ...0002).
+INSERT INTO user_roles (tenant_id, user_id, role_id)
+VALUES (
+  '00000000-0000-0000-0000-000000000001',
+  '00000000-0000-0000-0000-000000000002',
+  '00000000-0000-0000-0000-000000000020'
+) ON CONFLICT (tenant_id, user_id, role_id) DO NOTHING;
