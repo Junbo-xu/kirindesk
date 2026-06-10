@@ -164,12 +164,12 @@ If something failed, report the exact failure and propose the smallest safe fix.
 
 The current completed execution scope is:
 
-- Phase 0A: Monorepo project skeleton
-- Phase 0B: Docker Compose local environment with PostgreSQL and Redis
-- Phase 0C-Trust: Trust & Security documentation framework
+- Phase 0: Foundation baseline established — monorepo skeleton, Docker Compose local env (PostgreSQL + Redis), trust & security docs, and the rules/docs for database, tenant isolation, auth, RBAC, RLS, audit, file security, and provider abstraction. Database migrations, dual-JWT auth, RBAC, audit hash-chain, and the quality gate / test infrastructure have landed in code.
+- Phase 1A: Customers — table (RLS + indexes), API (CRUD + soft delete + dataScope + audit), and integration tests. Committed.
+- Phase 1B: Sales Orders — table, API, and web CRUD pages. Frontend CRUD browser QA (T01–T13) passed: create / list / filter / search / edit / soft-delete, with 400 / 401 / 404 / 409 verified. Committed (latest commit 54aa2be).
 
 The next planned step is:
 
-Phase 0D — Database Foundation Plan
+Phase 1C — planning pending user approval.
 
-Do not jump to Phase 1 until Phase 0 database, tenant, auth, RBAC, RLS, audit, file security, provider abstraction, and trust foundations are planned and approved.
+The Phase 0 foundation baseline is in place. Do not start Phase 1C implementation until its scope is planned and approved.
