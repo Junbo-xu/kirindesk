@@ -1,11 +1,13 @@
 import {
   ApiError,
+  CreateCustomerInput,
   CreateSalesOrderInput,
-  CustomerOption,
+  CustomerResponse,
   LoginResponse,
   MeResponse,
   Paginated,
   SalesOrderResponse,
+  UpdateCustomerInput,
   UpdateSalesOrderInput,
 } from './types';
 
@@ -137,15 +139,39 @@ export const apiClient = {
     });
   },
   listCustomers(query: {
-    status?: string;
+    page?: number;
     pageSize?: number;
-  }): Promise<Paginated<CustomerOption>> {
+    q?: string;
+    status?: string;
+  }): Promise<Paginated<CustomerResponse>> {
     const params = new URLSearchParams();
-    if (query.status) params.set('status', query.status);
+    if (query.page !== undefined) params.set('page', String(query.page));
     if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
     const qs = params.toString();
-    return request<Paginated<CustomerOption>>(
+    return request<Paginated<CustomerResponse>>(
       `/api/customers${qs ? `?${qs}` : ''}`,
     );
+  },
+  getCustomer(id: string): Promise<CustomerResponse> {
+    return request<CustomerResponse>(`/api/customers/${id}`);
+  },
+  createCustomer(input: CreateCustomerInput): Promise<CustomerResponse> {
+    return request<CustomerResponse>('/api/customers', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  updateCustomer(id: string, input: UpdateCustomerInput): Promise<CustomerResponse> {
+    return request<CustomerResponse>(`/api/customers/${id}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  deleteCustomer(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/customers/${id}`, {
+      method: 'DELETE',
+    });
   },
 };

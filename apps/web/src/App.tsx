@@ -3,13 +3,14 @@ import { AuthProvider } from './auth/AuthContext';
 import { LoginPage } from './auth/LoginPage';
 import { ProtectedRoute } from './auth/ProtectedRoute';
 import { AppLayout } from './components/AppLayout';
+import { CustomersListPage } from './customers/CustomersListPage';
+import { CustomerFormPage } from './customers/CustomerFormPage';
 import { SalesOrdersListPage } from './sales-orders/SalesOrdersListPage';
 import { SalesOrderFormPage } from './sales-orders/SalesOrderFormPage';
 
-// Placeholder home for the Foundation phase. Sales Orders pages arrive in the
-// next phase (1B-SalesOrders-FE-CRUD).
+// Placeholder home for the Foundation phase.
 function HomePage() {
-  return <p>已登录。Sales Orders 页面将在下一阶段实现。</p>;
+  return <p>已登录。请从顶部导航进入客户或销售订单。</p>;
 }
 
 export function App() {
@@ -21,6 +22,9 @@ export function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
               <Route path="/" element={<HomePage />} />
+              <Route path="/customers" element={<CustomersListPage />} />
+              <Route path="/customers/new" element={<CustomerFormPage />} />
+              <Route path="/customers/:id/edit" element={<CustomerFormPage />} />
               <Route path="/orders" element={<SalesOrdersListPage />} />
               <Route path="/orders/new" element={<SalesOrderFormPage />} />
               <Route path="/orders/:id/edit" element={<SalesOrderFormPage />} />

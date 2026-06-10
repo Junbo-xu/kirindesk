@@ -16,6 +16,7 @@ export function AppLayout() {
       >
         <strong>KirinDesk</strong>
         <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Link to="/customers">客户</Link>
           <Link to="/orders">销售订单</Link>
           <span style={{ color: '#555' }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>

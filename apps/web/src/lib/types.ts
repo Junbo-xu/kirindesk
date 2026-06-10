@@ -54,6 +54,44 @@ export interface CustomerOption {
   company_name: string;
 }
 
+export type CustomerStatus = 'active' | 'inactive';
+
+export interface CustomerResponse {
+  id: string;
+  company_name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  country: string | null;
+  source: string | null;
+  status: CustomerStatus;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCustomerInput {
+  company_name: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  source?: string;
+  status?: CustomerStatus;
+  notes?: string;
+}
+
+export interface UpdateCustomerInput {
+  company_name?: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  source?: string;
+  status?: CustomerStatus;
+  notes?: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

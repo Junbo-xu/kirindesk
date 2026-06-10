@@ -39,3 +39,4 @@ coverage/
 # Docker volumes (if mounted locally)
 docker/postgres/data/
 docker/redis/data/
+docker-compose.override.yml
