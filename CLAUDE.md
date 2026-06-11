@@ -165,11 +165,12 @@ If something failed, report the exact failure and propose the smallest safe fix.
 The current completed execution scope is:
 
 - Phase 0: Foundation baseline established — monorepo skeleton, Docker Compose local env (PostgreSQL + Redis), trust & security docs, and the rules/docs for database, tenant isolation, auth, RBAC, RLS, audit, file security, and provider abstraction. Database migrations, dual-JWT auth, RBAC, audit hash-chain, and the quality gate / test infrastructure have landed in code.
-- Phase 1A: Customers — table (RLS + indexes), API (CRUD + soft delete + dataScope + audit), and integration tests. Committed.
+- Phase 1A: Customers — table (RLS + indexes), API (CRUD + soft delete + dataScope + audit), and integration tests. Web CRUD pages added later (commit 2a6b4ad). Committed.
 - Phase 1B: Sales Orders — table, API, and web CRUD pages. Frontend CRUD browser QA (T01–T13) passed: create / list / filter / search / edit / soft-delete, with 400 / 401 / 404 / 409 verified. Committed (latest commit 54aa2be).
+- Phase 1C: Suppliers — table (RLS + indexes), suppliers:* permissions (procurement module), API (CRUD + soft delete + dataScope + audit), web CRUD pages, and integration tests. Integration suite 101 passing; browser QA (create / list / filter / search / edit / soft-delete / nav) and server-side 400 / 401 / 404 verified. Committed (commit 76363c6).
 
 The next planned step is:
 
-Phase 1C — planning pending user approval.
+Phase 1D — planning pending user approval.
 
-The Phase 0 foundation baseline is in place. Do not start Phase 1C implementation until its scope is planned and approved.
+The Phase 0 foundation baseline is in place. Do not start Phase 1D implementation until its scope is planned and approved.
