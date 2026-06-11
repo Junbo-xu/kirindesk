@@ -168,9 +168,10 @@ The current completed execution scope is:
 - Phase 1A: Customers — table (RLS + indexes), API (CRUD + soft delete + dataScope + audit), and integration tests. Web CRUD pages added later (commit 2a6b4ad). Committed.
 - Phase 1B: Sales Orders — table, API, and web CRUD pages. Frontend CRUD browser QA (T01–T13) passed: create / list / filter / search / edit / soft-delete, with 400 / 401 / 404 / 409 verified. Committed (latest commit 54aa2be).
 - Phase 1C: Suppliers — table (RLS + indexes), suppliers:* permissions (procurement module), API (CRUD + soft delete + dataScope + audit), web CRUD pages, and integration tests. Integration suite 101 passing; browser QA (create / list / filter / search / edit / soft-delete / nav) and server-side 400 / 401 / 404 verified. Committed (commit 76363c6).
+- Phase 1D: Purchase Orders — table (RLS + indexes, supplier_id FK ON DELETE RESTRICT, unique tenant order_number), procurement:delete permission, API (CRUD + soft delete + dataScope + supplier in-scope check + duplicate order_number 409 + audit), web CRUD pages with supplier dropdown, and integration tests. Full quality gate green (lint / format / typecheck / build / unit 7 / integration 129 / security 13); browser QA (create / supplier dropdown / name mapping / search / edit / soft-delete / nav) and server-side 400 / 401 / 404 / 409 verified. Committed (commit 0d9b082).
 
 The next planned step is:
 
-Phase 1D — planning pending user approval.
+Phase 1E — planning pending user approval.
 
-The Phase 0 foundation baseline is in place. Do not start Phase 1D implementation until its scope is planned and approved.
+The Phase 0 foundation baseline is in place. Do not start Phase 1E implementation until its scope is planned and approved.
