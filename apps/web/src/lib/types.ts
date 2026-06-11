@@ -92,6 +92,44 @@ export interface UpdateCustomerInput {
   notes?: string;
 }
 
+export type SupplierStatus = 'active' | 'inactive';
+
+export interface SupplierResponse {
+  id: string;
+  company_name: string;
+  contact_name: string | null;
+  email: string | null;
+  phone: string | null;
+  country: string | null;
+  category: string | null;
+  status: SupplierStatus;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSupplierInput {
+  company_name: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  category?: string;
+  status?: SupplierStatus;
+  notes?: string;
+}
+
+export interface UpdateSupplierInput {
+  company_name?: string;
+  contact_name?: string;
+  email?: string;
+  phone?: string;
+  country?: string;
+  category?: string;
+  status?: SupplierStatus;
+  notes?: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

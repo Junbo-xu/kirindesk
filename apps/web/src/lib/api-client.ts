@@ -2,13 +2,16 @@ import {
   ApiError,
   CreateCustomerInput,
   CreateSalesOrderInput,
+  CreateSupplierInput,
   CustomerResponse,
   LoginResponse,
   MeResponse,
   Paginated,
   SalesOrderResponse,
+  SupplierResponse,
   UpdateCustomerInput,
   UpdateSalesOrderInput,
+  UpdateSupplierInput,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -171,6 +174,42 @@ export const apiClient = {
   },
   deleteCustomer(id: string): Promise<{ id: string; deleted: true }> {
     return request<{ id: string; deleted: true }>(`/api/customers/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  listSuppliers(query: {
+    page?: number;
+    pageSize?: number;
+    q?: string;
+    status?: string;
+  }): Promise<Paginated<SupplierResponse>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    return request<Paginated<SupplierResponse>>(
+      `/api/suppliers${qs ? `?${qs}` : ''}`,
+    );
+  },
+  getSupplier(id: string): Promise<SupplierResponse> {
+    return request<SupplierResponse>(`/api/suppliers/${id}`);
+  },
+  createSupplier(input: CreateSupplierInput): Promise<SupplierResponse> {
+    return request<SupplierResponse>('/api/suppliers', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  updateSupplier(id: string, input: UpdateSupplierInput): Promise<SupplierResponse> {
+    return request<SupplierResponse>(`/api/suppliers/${id}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  deleteSupplier(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/suppliers/${id}`, {
       method: 'DELETE',
     });
   },

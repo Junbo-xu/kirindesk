@@ -8,6 +8,7 @@ import { RbacModule } from './rbac/rbac.module';
 import { AuditModule } from './audit/audit.module';
 import { CustomersModule } from './customers/customers.module';
 import { SalesOrdersModule } from './sales-orders/sales-orders.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { SalesOrdersModule } from './sales-orders/sales-orders.module';
     AuditModule,
     CustomersModule,
     SalesOrdersModule,
+    SuppliersModule,
   ],
 })
 export class AppModule {}
