@@ -54,6 +54,42 @@ export interface CustomerOption {
   company_name: string;
 }
 
+export interface SupplierOption {
+  id: string;
+  company_name: string;
+}
+
+export interface PurchaseOrderResponse {
+  id: string;
+  supplier_id: string;
+  owner_user_id: string;
+  order_number: string;
+  pi_number: string | null;
+  currency: Currency;
+  total_amount: string;
+  status: OrderStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreatePurchaseOrderInput {
+  supplier_id: string;
+  order_number: string;
+  currency: Currency;
+  total_amount: string;
+  pi_number?: string;
+  status?: OrderStatus;
+  notes?: string;
+}
+
+export interface UpdatePurchaseOrderInput {
+  pi_number?: string;
+  currency?: Currency;
+  total_amount?: string;
+  status?: OrderStatus;
+  notes?: string;
+}
+
 export type CustomerStatus = 'active' | 'inactive';
 
 export interface CustomerResponse {

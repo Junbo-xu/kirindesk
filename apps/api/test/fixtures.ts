@@ -56,11 +56,21 @@ export const SUPPLIER_PERMS = [
   'suppliers:delete',
 ] as const;
 
+// The four permissions the purchase-orders endpoints require. approve is seeded
+// in production but intentionally not granted here (out of phase scope).
+export const PROCUREMENT_ORDER_PERMS = [
+  'procurement:view',
+  'procurement:create',
+  'procurement:update',
+  'procurement:delete',
+] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
   ...ORDER_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
   ...SUPPLIER_PERMS.map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
+  ...PROCUREMENT_ORDER_PERMS.map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
 ];
 
 interface RoleSpec {

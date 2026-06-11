@@ -9,10 +9,12 @@ import { SuppliersListPage } from './suppliers/SuppliersListPage';
 import { SupplierFormPage } from './suppliers/SupplierFormPage';
 import { SalesOrdersListPage } from './sales-orders/SalesOrdersListPage';
 import { SalesOrderFormPage } from './sales-orders/SalesOrderFormPage';
+import { PurchaseOrdersListPage } from './purchase-orders/PurchaseOrdersListPage';
+import { PurchaseOrderFormPage } from './purchase-orders/PurchaseOrderFormPage';
 
 // Placeholder home for the Foundation phase.
 function HomePage() {
-  return <p>已登录。请从顶部导航进入客户、供应商或销售订单。</p>;
+  return <p>已登录。请从顶部导航进入客户、供应商、销售订单或采购订单。</p>;
 }
 
 export function App() {
@@ -33,6 +35,9 @@ export function App() {
               <Route path="/orders" element={<SalesOrdersListPage />} />
               <Route path="/orders/new" element={<SalesOrderFormPage />} />
               <Route path="/orders/:id/edit" element={<SalesOrderFormPage />} />
+              <Route path="/purchase-orders" element={<PurchaseOrdersListPage />} />
+              <Route path="/purchase-orders/new" element={<PurchaseOrderFormPage />} />
+              <Route path="/purchase-orders/:id/edit" element={<PurchaseOrderFormPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

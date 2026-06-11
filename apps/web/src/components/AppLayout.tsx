@@ -19,6 +19,7 @@ export function AppLayout() {
           <Link to="/customers">客户</Link>
           <Link to="/suppliers">供应商</Link>
           <Link to="/orders">销售订单</Link>
+          <Link to="/purchase-orders">采购订单</Link>
           <span style={{ color: '#555' }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>
         </span>

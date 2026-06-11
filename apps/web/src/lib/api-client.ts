@@ -3,15 +3,18 @@ import {
   CreateCustomerInput,
   CreateSalesOrderInput,
   CreateSupplierInput,
+  CreatePurchaseOrderInput,
   CustomerResponse,
   LoginResponse,
   MeResponse,
   Paginated,
   SalesOrderResponse,
   SupplierResponse,
+  PurchaseOrderResponse,
   UpdateCustomerInput,
   UpdateSalesOrderInput,
   UpdateSupplierInput,
+  UpdatePurchaseOrderInput,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -210,6 +213,44 @@ export const apiClient = {
   },
   deleteSupplier(id: string): Promise<{ id: string; deleted: true }> {
     return request<{ id: string; deleted: true }>(`/api/suppliers/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  listPurchaseOrders(query: {
+    page?: number;
+    pageSize?: number;
+    q?: string;
+    status?: string;
+    supplier_id?: string;
+  }): Promise<Paginated<PurchaseOrderResponse>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
+    if (query.supplier_id) params.set('supplier_id', query.supplier_id);
+    const qs = params.toString();
+    return request<Paginated<PurchaseOrderResponse>>(
+      `/api/purchase-orders${qs ? `?${qs}` : ''}`,
+    );
+  },
+  getPurchaseOrder(id: string): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}`);
+  },
+  createPurchaseOrder(input: CreatePurchaseOrderInput): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>('/api/purchase-orders', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  updatePurchaseOrder(id: string, input: UpdatePurchaseOrderInput): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  deletePurchaseOrder(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/purchase-orders/${id}`, {
       method: 'DELETE',
     });
   },
