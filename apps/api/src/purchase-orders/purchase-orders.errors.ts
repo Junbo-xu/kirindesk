@@ -1,4 +1,4 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 
 /**
  * Thrown when a purchase order is not visible to the caller: it does not exist,
@@ -30,5 +30,16 @@ export class OrderSupplierNotFoundException extends NotFoundException {
 export class DuplicateOrderNumberException extends ConflictException {
   constructor() {
     super('Order number already exists');
+  }
+}
+
+/**
+ * Thrown when a non-draft order would have no line items. Draft orders may have
+ * zero lines (work in progress); confirmed/completed/cancelled orders created
+ * or transitioned with an explicit empty item set are rejected (Phase 1F-A §6).
+ */
+export class OrderRequiresLineItemException extends BadRequestException {
+  constructor() {
+    super('A non-draft order must have at least one line item');
   }
 }

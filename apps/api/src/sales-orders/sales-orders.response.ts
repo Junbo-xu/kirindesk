@@ -1,3 +1,5 @@
+import type { OrderItemResponse } from './dto/order-item.dto';
+
 export interface SalesOrderRow {
   id: string;
   tenant_id: string;
@@ -28,6 +30,9 @@ export interface SalesOrderResponse {
   status: string;
   created_at: Date;
   updated_at: Date;
+  // Present on single-order responses (create/getOne/update); omitted from list
+  // rows to keep the list payload lightweight.
+  items?: OrderItemResponse[];
 }
 
 /**

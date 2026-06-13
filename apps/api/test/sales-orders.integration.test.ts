@@ -119,9 +119,9 @@ describe('Sales Orders API (integration)', () => {
     expect(res.status).toBe(403);
   });
 
-  // --- create: ownership from caller, total_amount stays a string ---
+  // --- create: ownership from caller, total_amount derived from items ---
 
-  it('admin creates an order -> 201, owner = admin, amount is string', async () => {
+  it('admin creates an order -> 201, owner = admin, total derived from items', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/sales-orders')
       .set(bearer(adminToken))
@@ -129,14 +129,19 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-ADMIN-1',
         currency: 'USD',
-        total_amount: '1234.50',
+        // 2 * 617.25 = 1234.50, derived server-side.
+        items: [{ description: 'Widget', quantity: '2', unit_price: '617.25' }],
       });
     expect(res.status).toBe(201);
     expect(res.body.owner_user_id).toBe(TEST_USER_ID);
     expect(res.body.order_number).toBe('SO-ADMIN-1');
     expect(res.body.status).toBe('draft');
+    // total_amount is derived (Σ line_total), not client-supplied.
     expect(res.body.total_amount).toBe('1234.50');
     expect(typeof res.body.total_amount).toBe('string');
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].line_no).toBe(1);
+    expect(res.body.items[0].line_total).toBe('1234.50');
     adminOrderId = res.body.id;
   });
 
@@ -148,10 +153,11 @@ describe('Sales Orders API (integration)', () => {
         customer_id: salesCustomerId,
         order_number: 'SO-SALES-1',
         currency: 'RMB',
-        total_amount: '99',
+        items: [{ description: 'Sample', quantity: '1', unit_price: '99' }],
       });
     expect(res.status).toBe(201);
     expect(res.body.owner_user_id).toBe(TEST_USER2_ID);
+    expect(res.body.total_amount).toBe('99.00');
     salesOrderId = res.body.id;
   });
 
@@ -165,7 +171,6 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-SALES-X',
         currency: 'USD',
-        total_amount: '10',
       });
     expect(res.status).toBe(404);
   });
@@ -178,7 +183,6 @@ describe('Sales Orders API (integration)', () => {
         customer_id: tenant2CustomerId,
         order_number: 'SO-ADMIN-X',
         currency: 'USD',
-        total_amount: '10',
       });
     expect(res.status).toBe(404);
   });
@@ -193,7 +197,6 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-ADMIN-1',
         currency: 'USD',
-        total_amount: '5',
       });
     expect(res.status).toBe(409);
   });
@@ -244,14 +247,21 @@ describe('Sales Orders API (integration)', () => {
 
   // --- update + soft delete ---
 
-  it('admin updates the sales order -> 200, fields changed', async () => {
+  it('admin updates the sales order -> 200, status + items replaced, total re-derived', async () => {
     const res = await request(app.getHttpServer())
       .patch(`/api/sales-orders/${salesOrderId}`)
       .set(bearer(adminToken))
-      .send({ status: 'confirmed', total_amount: '150.00' });
+      .send({
+        status: 'confirmed',
+        // Replace lines: 3 * 50.00 = 150.00 derived.
+        items: [{ description: 'Revised', quantity: '3', unit_price: '50' }],
+      });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('confirmed');
     expect(res.body.total_amount).toBe('150.00');
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].line_no).toBe(1);
+    expect(res.body.items[0].line_total).toBe('150.00');
   });
 
   it('admin soft-deletes the sales order -> 200 { deleted: true }', async () => {
@@ -312,12 +322,11 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-BAD-CUR',
         currency: 'JPY',
-        total_amount: '10',
       });
     expect(res.status).toBe(400);
   });
 
-  it('create with negative / over-precision total_amount returns 400', async () => {
+  it('create with negative / over-precision item unit_price returns 400', async () => {
     const neg = await request(app.getHttpServer())
       .post('/api/sales-orders')
       .set(bearer(adminToken))
@@ -325,7 +334,7 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-NEG',
         currency: 'USD',
-        total_amount: '-1',
+        items: [{ description: 'Bad', quantity: '1', unit_price: '-1' }],
       });
     expect(neg.status).toBe(400);
 
@@ -336,16 +345,30 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-PREC',
         currency: 'USD',
-        total_amount: '1.234',
+        // unit_price allows up to 4 decimals; 5 decimals is rejected.
+        items: [{ description: 'Bad', quantity: '1', unit_price: '1.23456' }],
       });
     expect(prec.status).toBe(400);
+  });
+
+  it('create non-draft with no items returns 400', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/sales-orders')
+      .set(bearer(adminToken))
+      .send({
+        customer_id: adminCustomerId,
+        order_number: 'SO-NOITEMS',
+        currency: 'USD',
+        status: 'confirmed',
+      });
+    expect(res.status).toBe(400);
   });
 
   it('create missing customer_id returns 400', async () => {
     const res = await request(app.getHttpServer())
       .post('/api/sales-orders')
       .set(bearer(adminToken))
-      .send({ order_number: 'SO-NOCUST', currency: 'USD', total_amount: '10' });
+      .send({ order_number: 'SO-NOCUST', currency: 'USD' });
     expect(res.status).toBe(400);
   });
 
@@ -357,7 +380,6 @@ describe('Sales Orders API (integration)', () => {
         customer_id: adminCustomerId,
         order_number: 'SO-EXTRA',
         currency: 'USD',
-        total_amount: '10',
         pi_file_id: '00000000-0000-0000-0000-000000000000',
       });
     expect(res.status).toBe(400);

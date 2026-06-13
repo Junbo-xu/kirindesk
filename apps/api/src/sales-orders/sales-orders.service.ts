@@ -7,11 +7,19 @@ import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { ListSalesOrdersQuery } from './dto/list-sales-orders.query';
 import {
+  OrderItemInputDto,
+  OrderItemRow,
+  OrderItemResponse,
+  toOrderItemResponse,
+} from './dto/order-item.dto';
+import {
   SalesOrderNotFoundException,
   OrderCustomerNotFoundException,
   DuplicateOrderNumberException,
+  OrderRequiresLineItemException,
 } from './sales-orders.errors';
 import { SalesOrderRow, SalesOrderResponse, toSalesOrderResponse } from './sales-orders.response';
+import { computeLineTotal, sumMoney } from '../common/order-money';
 
 export interface RequestActor {
   userId: string;
@@ -68,10 +76,62 @@ export class SalesOrdersService {
     }
   }
 
+  // Inserts the given line items for an order in array order, assigning line_no
+  // 1..N and computing line_total per row. Returns the persisted rows (in order)
+  // so the caller can derive total_amount and build the response/audit snapshot.
+  // Runs inside the caller's transaction client (tenant context already set).
+  private async insertItems(
+    client: PoolClient,
+    actor: RequestActor,
+    orderId: string,
+    items: OrderItemInputDto[],
+  ): Promise<OrderItemRow[]> {
+    const rows: OrderItemRow[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const lineNo = i + 1;
+      const lineTotal = computeLineTotal(item.quantity, item.unit_price);
+      const { rows: inserted } = await client.query<OrderItemRow>(
+        `INSERT INTO sales_order_items
+           (tenant_id, order_id, line_no, description, product_code, unit,
+            quantity, unit_price, line_total, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          actor.tenantId,
+          orderId,
+          lineNo,
+          item.description,
+          item.product_code ?? null,
+          item.unit ?? null,
+          item.quantity,
+          item.unit_price,
+          lineTotal,
+          item.notes ?? null,
+        ],
+      );
+      rows.push(inserted[0]);
+    }
+    return rows;
+  }
+
   async create(actor: RequestActor, dto: CreateSalesOrderDto): Promise<SalesOrderResponse> {
+    const items = dto.items ?? [];
+    const status = dto.status ?? 'draft';
+
+    // Phase 1F-A §6/§7: non-draft orders must carry at least one line. Draft
+    // orders may be saved with zero lines (work in progress).
+    if (status !== 'draft' && items.length === 0) {
+      throw new OrderRequiresLineItemException();
+    }
+
+    // total_amount is derived server-side from the line items; any client-sent
+    // value is ignored (the DTO no longer accepts it). An order with no items
+    // (draft, or a historical-style header-only order) totals 0.00.
     let row: SalesOrderRow;
+    let itemRows: OrderItemRow[];
     try {
-      row = await withTenantContext(
+      const result = await withTenantContext(
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
@@ -80,7 +140,7 @@ export class SalesOrdersService {
             `INSERT INTO sales_orders
                (tenant_id, customer_id, owner_user_id, order_number, pi_number, pi_file_id,
                 currency, total_amount, status, notes)
-             VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, COALESCE($8, 'draft'), $9)
+             VALUES ($1, $2, $3, $4, $5, NULL, $6, 0, COALESCE($7, 'draft'), $8)
              RETURNING *`,
             [
               actor.tenantId,
@@ -89,14 +149,25 @@ export class SalesOrdersService {
               dto.order_number,
               dto.pi_number ?? null,
               dto.currency,
-              dto.total_amount,
               dto.status ?? null,
               dto.notes ?? null,
             ],
           );
-          return rows[0];
+          const header = rows[0];
+
+          const insertedItems = await this.insertItems(client, actor, header.id, items);
+          const total = sumMoney(insertedItems.map((r) => r.line_total));
+
+          // Write the derived total back onto the header within the same tx.
+          const { rows: updated } = await client.query<SalesOrderRow>(
+            `UPDATE sales_orders SET total_amount = $1 WHERE id = $2 RETURNING *`,
+            [total, header.id],
+          );
+          return { header: updated[0], items: insertedItems };
         },
       );
+      row = result.header;
+      itemRows = result.items;
     } catch (err) {
       if ((err as { code?: string }).code === UNIQUE_VIOLATION) {
         throw new DuplicateOrderNumberException();
@@ -104,15 +175,18 @@ export class SalesOrdersService {
       throw err;
     }
 
+    const itemResponses: OrderItemResponse[] = itemRows.map(toOrderItemResponse);
+    const response = { ...toSalesOrderResponse(row), items: itemResponses };
+
     await this.safeAudit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
       action: 'sales_order.created',
       resourceId: row.id,
-      after: toSalesOrderResponse(row),
+      after: response,
     });
 
-    return toSalesOrderResponse(row);
+    return response;
   }
 
   async list(actor: RequestActor, query: ListSalesOrdersQuery): Promise<ListResult> {
@@ -189,12 +263,28 @@ export class SalesOrdersService {
   }
 
   async getOne(actor: RequestActor, id: string): Promise<SalesOrderResponse> {
-    const row = await withTenantContext(
+    return withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
-      (client) => this.fetchInScope(client, actor, id),
+      async (client) => {
+        const row = await this.fetchInScope(client, actor, id);
+        const items = await this.fetchItems(client, row.id);
+        return { ...toSalesOrderResponse(row), items: items.map(toOrderItemResponse) };
+      },
     );
-    return toSalesOrderResponse(row);
+  }
+
+  // Fetches the live (non-soft-deleted) line items for an order, ordered by
+  // line_no. Used for the audit before-snapshot and for the items-absent update
+  // case (when items are unchanged but we still report/derive from them).
+  private async fetchItems(client: PoolClient, orderId: string): Promise<OrderItemRow[]> {
+    const { rows } = await client.query<OrderItemRow>(
+      `SELECT * FROM sales_order_items
+       WHERE order_id = $1 AND deleted_at IS NULL
+       ORDER BY line_no ASC`,
+      [orderId],
+    );
+    return rows;
   }
 
   async update(
@@ -202,15 +292,28 @@ export class SalesOrdersService {
     id: string,
     dto: UpdateSalesOrderDto,
   ): Promise<SalesOrderResponse> {
-    const { before, after } = await withTenantContext(
+    const { before, beforeItems, after, afterItems } = await withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
+        const existingItems = await this.fetchItems(client, existing.id);
 
-        // Whitelist of updatable columns; values are bound as parameters.
-        // customer_id, order_number and pi_file_id are immutable in this phase.
-        const allowed = ['pi_number', 'currency', 'total_amount', 'status', 'notes'] as const;
+        // Determine the resulting status to enforce the line-item rule against
+        // the post-update state, and the resulting item set.
+        const resultingStatus = dto.status ?? existing.status;
+        const replacingItems = dto.items !== undefined;
+        const resultingItemCount = replacingItems ? dto.items!.length : existingItems.length;
+
+        // Phase 1F-A §6: a non-draft order must end up with at least one line.
+        if (resultingStatus !== 'draft' && resultingItemCount === 0) {
+          throw new OrderRequiresLineItemException();
+        }
+
+        // Header column whitelist. total_amount is NOT here — it is derived from
+        // line items, never set directly. customer_id/order_number/pi_file_id
+        // remain immutable in this phase.
+        const allowed = ['pi_number', 'currency', 'status', 'notes'] as const;
         const sets: string[] = [];
         const params: unknown[] = [];
         for (const col of allowed) {
@@ -219,27 +322,66 @@ export class SalesOrdersService {
             sets.push(`${col} = $${params.length}`);
           }
         }
+
+        // Resolve the resulting item rows. When items are provided, replace the
+        // whole set (full-array semantics): soft-delete all current live lines,
+        // then insert the new set with freshly assigned line_no 1..N. When items
+        // are absent, the existing lines stand unchanged.
+        let resultingItems: OrderItemRow[];
+        if (replacingItems) {
+          await client.query(
+            `UPDATE sales_order_items SET deleted_at = now(), updated_at = now()
+             WHERE order_id = $1 AND deleted_at IS NULL`,
+            [existing.id],
+          );
+          resultingItems = await this.insertItems(client, actor, existing.id, dto.items!);
+        } else {
+          resultingItems = existingItems;
+        }
+
+        // Always re-derive total_amount from the resulting live items so the
+        // header stays consistent (a historical header-only order with no items
+        // derives to 0.00 only if items were explicitly replaced with an empty
+        // set; otherwise its existing lines — if any — drive the total).
+        const total = sumMoney(resultingItems.map((r) => r.line_total));
+        params.push(total);
+        sets.push(`total_amount = $${params.length}`);
+
         sets.push('updated_at = now()');
-        params.push(id);
+        params.push(existing.id);
 
         const { rows } = await client.query<SalesOrderRow>(
           `UPDATE sales_orders SET ${sets.join(', ')} WHERE id = $${params.length} AND deleted_at IS NULL RETURNING *`,
           params,
         );
-        return { before: existing, after: rows[0] };
+        return {
+          before: existing,
+          beforeItems: existingItems,
+          after: rows[0],
+          afterItems: resultingItems,
+        };
       },
     );
+
+    const beforeResponse = {
+      ...toSalesOrderResponse(before),
+      items: beforeItems.map(toOrderItemResponse),
+    };
+    const afterResponse = {
+      ...toSalesOrderResponse(after),
+      items: afterItems.map(toOrderItemResponse),
+    };
 
     await this.safeAudit({
       tenantId: actor.tenantId,
       actorId: actor.userId,
       action: 'sales_order.updated',
       resourceId: id,
-      before: toSalesOrderResponse(before),
-      after: toSalesOrderResponse(after),
+      before: beforeResponse,
+      after: afterResponse,
     });
 
-    return toSalesOrderResponse(after);
+    return afterResponse;
   }
 
   async remove(actor: RequestActor, id: string): Promise<void> {

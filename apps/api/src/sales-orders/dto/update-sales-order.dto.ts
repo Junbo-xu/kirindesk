@@ -1,9 +1,10 @@
-import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
-
-const MONEY = /^\d{1,16}(\.\d{1,2})?$/;
+import { IsArray, IsIn, IsOptional, IsString, MaxLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { OrderItemInputDto } from './order-item.dto';
 
 // Updatable fields only. customer_id, order_number and pi_file_id are immutable
-// in this phase and intentionally absent.
+// in this phase and intentionally absent. total_amount is derived from items,
+// never set directly by the client.
 export class UpdateSalesOrderDto {
   @IsOptional()
   @IsString()
@@ -15,11 +16,6 @@ export class UpdateSalesOrderDto {
   currency?: string;
 
   @IsOptional()
-  @IsString()
-  @Matches(MONEY, { message: 'total_amount must be a non-negative amount with up to 2 decimals' })
-  total_amount?: string;
-
-  @IsOptional()
   @IsIn(['draft', 'confirmed', 'completed', 'cancelled'])
   status?: string;
 
@@ -27,4 +23,13 @@ export class UpdateSalesOrderDto {
   @IsString()
   @MaxLength(5000)
   notes?: string;
+
+  // When present, replaces the order's line set (full-array semantics): the
+  // service diffs against existing lines, soft-deletes removed ones, and
+  // re-derives total_amount. Absent = lines unchanged.
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemInputDto)
+  items?: OrderItemInputDto[];
 }

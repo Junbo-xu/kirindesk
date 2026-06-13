@@ -1,11 +1,17 @@
-import { IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
-import { Transform } from 'class-transformer';
+import {
+  IsArray,
+  IsIn,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  MinLength,
+  ValidateNested,
+} from 'class-validator';
+import { Transform, Type } from 'class-transformer';
+import { OrderItemInputDto } from './order-item.dto';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
-
-// Non-negative money matching numeric(18,2): up to 16 integer digits and an
-// optional 1-2 digit fraction. Kept as a string to avoid float precision loss.
-const MONEY = /^\d{1,16}(\.\d{1,2})?$/;
 
 export class CreateSalesOrderDto {
   @IsUUID()
@@ -25,9 +31,8 @@ export class CreateSalesOrderDto {
   @IsIn(['RMB', 'USD', 'HKD', 'EUR'])
   currency!: string;
 
-  @IsString()
-  @Matches(MONEY, { message: 'total_amount must be a non-negative amount with up to 2 decimals' })
-  total_amount!: string;
+  // total_amount is intentionally NOT accepted from the client. It is derived
+  // server-side as the sum of line_total over the items below (Phase 1F-A §6).
 
   @IsOptional()
   @IsIn(['draft', 'confirmed', 'completed', 'cancelled'])
@@ -37,4 +42,12 @@ export class CreateSalesOrderDto {
   @IsString()
   @MaxLength(5000)
   notes?: string;
+
+  // Order lines. Optional + may be empty for draft orders; the service enforces
+  // "non-draft must have >= 1 line" and derives total_amount from these.
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemInputDto)
+  items?: OrderItemInputDto[];
 }
