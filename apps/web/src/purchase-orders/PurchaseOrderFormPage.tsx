@@ -5,14 +5,37 @@ import {
   ApiError,
   Currency,
   CreatePurchaseOrderInput,
+  OrderItemInput,
   OrderStatus,
   UpdatePurchaseOrderInput,
 } from '../lib/types';
+import { computeLineTotal, sumMoney } from '../lib/order-money';
 import { useSupplierOptions } from './useSupplierOptions';
 
-const AMOUNT_RE = /^\d{1,16}(\.\d{1,2})?$/;
-
 const CURRENCY_OPTIONS: Currency[] = ['RMB', 'USD', 'HKD', 'EUR'];
+
+// An editable line row in the form. Mirrors OrderItemInput but every field is a
+// string so inputs stay controlled; optional fields are sent only when filled.
+interface ItemRow {
+  description: string;
+  product_code: string;
+  unit: string;
+  quantity: string;
+  unit_price: string;
+  notes: string;
+}
+
+const EMPTY_ROW: ItemRow = {
+  description: '',
+  product_code: '',
+  unit: '',
+  quantity: '',
+  unit_price: '',
+  notes: '',
+};
+
+const QUANTITY_RE = /^\d{1,15}(\.\d{1,3})?$/;
+const UNIT_PRICE_RE = /^\d{1,14}(\.\d{1,4})?$/;
 
 const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
   { value: 'draft', label: '草稿' },
@@ -31,7 +54,7 @@ export function PurchaseOrderFormPage() {
   const [orderNumber, setOrderNumber] = useState('');
   const [piNumber, setPiNumber] = useState('');
   const [currency, setCurrency] = useState<Currency>('RMB');
-  const [totalAmount, setTotalAmount] = useState('');
+  const [items, setItems] = useState<ItemRow[]>([]);
   const [status, setStatus] = useState('');
   const [notes, setNotes] = useState('');
 
@@ -54,8 +77,18 @@ export function PurchaseOrderFormPage() {
         setOrderNumber(o.order_number);
         setPiNumber(o.pi_number ?? '');
         setCurrency(o.currency);
-        setTotalAmount(o.total_amount);
         setStatus(o.status);
+        // Echo existing line items (ordered by line_no from the API).
+        setItems(
+          (o.items ?? []).map((it) => ({
+            description: it.description,
+            product_code: it.product_code ?? '',
+            unit: it.unit ?? '',
+            quantity: it.quantity,
+            unit_price: it.unit_price,
+            notes: it.notes ?? '',
+          })),
+        );
       })
       .catch((err) => {
         if (!active) return;
@@ -71,6 +104,53 @@ export function PurchaseOrderFormPage() {
       active = false;
     };
   }, [id]);
+
+  // Derived read-only total = Σ line_total, matching the server's derivation.
+  const lineTotals = items.map((r) => computeLineTotal(r.quantity, r.unit_price));
+  const derivedTotal = sumMoney(lineTotals);
+
+  function updateRow(index: number, patch: Partial<ItemRow>) {
+    setItems((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function addRow() {
+    setItems((rows) => [...rows, { ...EMPTY_ROW }]);
+  }
+
+  function removeRow(index: number) {
+    setItems((rows) => rows.filter((_, i) => i !== index));
+  }
+
+  // Validates rows and maps them to OrderItemInput. Returns null with an error
+  // set if any row is incomplete or malformed.
+  function buildItems(): OrderItemInput[] | null {
+    const out: OrderItemInput[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const r = items[i];
+      if (r.description.trim() === '') {
+        setError(`第 ${i + 1} 行：请填写描述`);
+        return null;
+      }
+      if (!QUANTITY_RE.test(r.quantity)) {
+        setError(`第 ${i + 1} 行：数量格式不正确（正数，最多 3 位小数）`);
+        return null;
+      }
+      if (!UNIT_PRICE_RE.test(r.unit_price)) {
+        setError(`第 ${i + 1} 行：单价格式不正确（非负，最多 4 位小数）`);
+        return null;
+      }
+      const item: OrderItemInput = {
+        description: r.description.trim(),
+        quantity: r.quantity,
+        unit_price: r.unit_price,
+      };
+      if (r.product_code.trim() !== '') item.product_code = r.product_code.trim();
+      if (r.unit.trim() !== '') item.unit = r.unit.trim();
+      if (r.notes.trim() !== '') item.notes = r.notes.trim();
+      out.push(item);
+    }
+    return out;
+  }
 
   function mapError(err: unknown) {
     const status = err instanceof ApiError ? err.status : 0;
@@ -94,8 +174,12 @@ export function PurchaseOrderFormPage() {
     setOrderNumberError(null);
     setSupplierError(null);
 
-    if (!AMOUNT_RE.test(totalAmount)) {
-      setError('金额格式不正确（最多 16 位整数，2 位小数）');
+    const builtItems = buildItems();
+    if (builtItems === null) return;
+
+    const effectiveStatus = status === '' ? 'draft' : (status as OrderStatus);
+    if (effectiveStatus !== 'draft' && builtItems.length === 0) {
+      setError('非草稿订单至少需要一条行项');
       return;
     }
 
@@ -105,9 +189,9 @@ export function PurchaseOrderFormPage() {
         const body: UpdatePurchaseOrderInput = {
           pi_number: piNumber.trim() === '' ? undefined : piNumber.trim(),
           currency,
-          total_amount: totalAmount,
           status: status as OrderStatus,
           notes: notes.trim() === '' ? undefined : notes.trim(),
+          items: builtItems,
         };
         await apiClient.updatePurchaseOrder(id, body);
       } else {
@@ -115,7 +199,7 @@ export function PurchaseOrderFormPage() {
           supplier_id: supplierId,
           order_number: orderNumber.trim(),
           currency,
-          total_amount: totalAmount,
+          items: builtItems,
         };
         if (piNumber.trim() !== '') body.pi_number = piNumber.trim();
         if (status !== '') body.status = status as OrderStatus;
@@ -137,7 +221,7 @@ export function PurchaseOrderFormPage() {
   }
 
   return (
-    <div style={{ maxWidth: 480, fontFamily: 'system-ui' }}>
+    <div style={{ maxWidth: 720, fontFamily: 'system-ui' }}>
       <h1 style={{ fontSize: 20 }}>{isEdit ? '编辑采购订单' : '新建采购订单'}</h1>
       <form onSubmit={onSubmit}>
         <label style={labelStyle}>
@@ -196,15 +280,75 @@ export function PurchaseOrderFormPage() {
             ))}
           </select>
         </label>
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <strong>行项</strong>
+            <button type="button" onClick={addRow}>
+              + 添加行项
+            </button>
+          </div>
+          {items.length === 0 && (
+            <p style={{ color: '#666', margin: '8px 0' }}>
+              暂无行项。草稿可不填；非草稿订单至少需要一条。
+            </p>
+          )}
+          {items.map((row, i) => {
+            const lineTotal = lineTotals[i];
+            return (
+              <div
+                key={i}
+                style={{
+                  border: '1px solid #ddd',
+                  borderRadius: 6,
+                  padding: 10,
+                  marginTop: 8,
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 90px 110px 110px auto',
+                  gap: 8,
+                  alignItems: 'end',
+                }}
+              >
+                <label style={{ fontSize: 13 }}>
+                  描述
+                  <input
+                    value={row.description}
+                    onChange={(e) => updateRow(i, { description: e.target.value })}
+                    maxLength={500}
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <label style={{ fontSize: 13 }}>
+                  数量
+                  <input
+                    value={row.quantity}
+                    onChange={(e) => updateRow(i, { quantity: e.target.value })}
+                    placeholder="如 2"
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <label style={{ fontSize: 13 }}>
+                  单价
+                  <input
+                    value={row.unit_price}
+                    onChange={(e) => updateRow(i, { unit_price: e.target.value })}
+                    placeholder="如 100.00"
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <label style={{ fontSize: 13 }}>
+                  小计
+                  <input value={lineTotal ?? '—'} readOnly tabIndex={-1} style={{ width: '100%', background: '#f5f5f5' }} />
+                </label>
+                <button type="button" onClick={() => removeRow(i)} title="删除该行">
+                  删除
+                </button>
+              </div>
+            );
+          })}
+        </div>
         <label style={labelStyle}>
-          金额
-          <input
-            value={totalAmount}
-            onChange={(e) => setTotalAmount(e.target.value)}
-            required
-            placeholder="例如 1000.00"
-            style={{ width: '100%' }}
-          />
+          总金额（自动汇总，不可手填）
+          <input value={derivedTotal} readOnly tabIndex={-1} style={{ width: '100%', background: '#f5f5f5' }} />
         </label>
         <label style={labelStyle}>
           状态{isEdit ? '' : '（选填，默认草稿）'}

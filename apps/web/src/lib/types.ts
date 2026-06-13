@@ -11,6 +11,30 @@ export interface LoginResponse {
 export type Currency = 'RMB' | 'USD' | 'HKD' | 'EUR';
 export type OrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled';
 
+// A line item as sent to the API. line_no and line_total are derived
+// server-side, so they are not part of the input.
+export interface OrderItemInput {
+  description: string;
+  product_code?: string;
+  unit?: string;
+  quantity: string;
+  unit_price: string;
+  notes?: string;
+}
+
+// A persisted line item returned by the API (single-order responses).
+export interface OrderItemResponse {
+  id: string;
+  line_no: number;
+  description: string;
+  product_code: string | null;
+  unit: string | null;
+  quantity: string;
+  unit_price: string;
+  line_total: string;
+  notes: string | null;
+}
+
 export interface SalesOrderResponse {
   id: string;
   customer_id: string;
@@ -22,6 +46,8 @@ export interface SalesOrderResponse {
   status: OrderStatus;
   created_at: string;
   updated_at: string;
+  // Present on single-order responses (getOne/create/update), not in list rows.
+  items?: OrderItemResponse[];
 }
 
 export interface Paginated<T> {
@@ -35,18 +61,20 @@ export interface CreateSalesOrderInput {
   customer_id: string;
   order_number: string;
   currency: Currency;
-  total_amount: string;
   pi_number?: string;
   status?: OrderStatus;
   notes?: string;
+  // total_amount is derived server-side from items; never sent by the client.
+  items?: OrderItemInput[];
 }
 
 export interface UpdateSalesOrderInput {
   pi_number?: string;
   currency?: Currency;
-  total_amount?: string;
   status?: OrderStatus;
   notes?: string;
+  // When present, replaces the order's full line set (server re-derives total).
+  items?: OrderItemInput[];
 }
 
 export interface CustomerOption {
@@ -70,24 +98,28 @@ export interface PurchaseOrderResponse {
   status: OrderStatus;
   created_at: string;
   updated_at: string;
+  // Present on single-order responses (getOne/create/update), not in list rows.
+  items?: OrderItemResponse[];
 }
 
 export interface CreatePurchaseOrderInput {
   supplier_id: string;
   order_number: string;
   currency: Currency;
-  total_amount: string;
   pi_number?: string;
   status?: OrderStatus;
   notes?: string;
+  // total_amount is derived server-side from items; never sent by the client.
+  items?: OrderItemInput[];
 }
 
 export interface UpdatePurchaseOrderInput {
   pi_number?: string;
   currency?: Currency;
-  total_amount?: string;
   status?: OrderStatus;
   notes?: string;
+  // When present, replaces the order's full line set (server re-derives total).
+  items?: OrderItemInput[];
 }
 
 export type CustomerStatus = 'active' | 'inactive';
