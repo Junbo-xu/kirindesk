@@ -169,9 +169,18 @@ The current completed execution scope is:
 - Phase 1B: Sales Orders — table, API, and web CRUD pages. Frontend CRUD browser QA (T01–T13) passed: create / list / filter / search / edit / soft-delete, with 400 / 401 / 404 / 409 verified. Committed (latest commit 54aa2be).
 - Phase 1C: Suppliers — table (RLS + indexes), suppliers:* permissions (procurement module), API (CRUD + soft delete + dataScope + audit), web CRUD pages, and integration tests. Integration suite 101 passing; browser QA (create / list / filter / search / edit / soft-delete / nav) and server-side 400 / 401 / 404 verified. Committed (commit 76363c6).
 - Phase 1D: Purchase Orders — table (RLS + indexes, supplier_id FK ON DELETE RESTRICT, unique tenant order_number), procurement:delete permission, API (CRUD + soft delete + dataScope + supplier in-scope check + duplicate order_number 409 + audit), web CRUD pages with supplier dropdown, and integration tests. Full quality gate green (lint / format / typecheck / build / unit 7 / integration 129 / security 13); browser QA (create / supplier dropdown / name mapping / search / edit / soft-delete / nav) and server-side 400 / 401 / 404 / 409 verified. Committed (commit 0d9b082).
+- Phase 1E: Files (object storage) — S3-compatible storage behind a provider interface (StorageProvider + S3StorageProvider, MinIO for local dev via docker-compose), files API (multipart upload with 25MB + MIME allowlist + server-side sha256, list + getOne + dataScope, single-use short-lived signed download tokens hashed at rest, public token-authenticated download endpoint, soft delete), files:view permission seed, migration 028 (user FKs + app_lookup_file_token SECURITY DEFINER helper for anonymous-download RLS bootstrap), migration 029 (pin SECURITY DEFINER search_path), and integration tests with an in-memory fake storage provider. Full quality gate green (lint / format / typecheck / build / unit 7 / integration 152 / security 13); end-to-end QA against real MinIO (upload → object lands with tenant-prefixed key → list → token download byte-match → token reuse 404 → MIME reject 400 → soft delete → audit chain uploaded/token_issued/downloaded/deleted) verified. Self-review (security/isolation, error-handling/concurrency, audit/provider/secrets) completed; two must-fix items (SECURITY DEFINER search_path, S3 SDK error scrubbing) resolved.
+
+  Known tech debt deferred from Phase 1E (revisit in later phases, not blocking):
+  - Tenant status gate on download: a token issued before a tenant is suspended remains usable for its short TTL. Belongs in a global tenant-lifecycle middleware, not the files module.
+  - Download token rate limiting: no cap on how many active tokens can be minted per file. Belongs in global rate-limiting middleware.
+  - Real-time permission revocation on download: download validates token validity only, not whether the issuer still holds files:download / the file is still in scope at download time. Inherent signed-token trade-off (short TTL + single-use mitigates).
+  - Orphan object sweep: a failed metadata insert after a successful storage put attempts a best-effort delete; double-failure leaves an orphan object (logged, no DB row references it). Needs a background reconciliation job (storage vs files table).
+  - sha256 de-duplication: identical content uploaded multiple times produces multiple rows/objects; sha256 is computed and stored but not used for dedup. Product decision (cross-user object sharing touches isolation).
+  - Audit metadata enrichment: file.downloaded / file.token_issued record actorId + resourceId only; downloader IP/UA and token id are not captured. Audit enhancement pending schema confirmation.
 
 The next planned step is:
 
-Phase 1E — planning pending user approval.
+Phase 1F — planning pending user approval.
 
-The Phase 0 foundation baseline is in place. Do not start Phase 1E implementation until its scope is planned and approved.
+The Phase 0 foundation baseline is in place. Phase 1E (Files) is complete. Do not start Phase 1F implementation until its scope is planned and approved.
