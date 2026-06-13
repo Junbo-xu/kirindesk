@@ -179,8 +179,10 @@ The current completed execution scope is:
   - sha256 de-duplication: identical content uploaded multiple times produces multiple rows/objects; sha256 is computed and stored but not used for dedup. Product decision (cross-user object sharing touches isolation).
   - Audit metadata enrichment: file.downloaded / file.token_issued record actorId + resourceId only; downloader IP/UA and token id are not captured. Audit enhancement pending schema confirmation.
 
+- Phase 1F-A: Order line items — migration 030 (sales_order_items + purchase_order_items detail tables with RLS + indexes + quantity/price/line_total numeric precision checks), backend for both sales and purchase orders (line items written in a single transaction, total_amount derived server-side as Σ line_total and never accepted from the client, line_no assigned server-side, draft allows 0 lines / non-draft requires ≥1, full-array replace semantics on update, audit before/after snapshots include full line-item sets, historical header-only orders still readable/editable), shared BigInt money helper (apps/api/src/common/order-money.ts) reused across both services, and a web line-item editor on both order forms (add/remove rows, per-row line_total + read-only derived total_amount, items[] sent on submit, existing lines echoed on edit). Full quality gate green (lint / format / typecheck / build / unit 15 / integration 154 / security 13); pushed (commits fb31e93 backend, 51e7d08 web). Browser QA still to be done.
+
 The next planned step is:
 
-Phase 1F — planning pending user approval.
+Phase 1F (continuation) — planning pending user approval. Candidates: option B finance/exchange-rate, or approval workflow.
 
-The Phase 0 foundation baseline is in place. Phase 1E (Files) is complete. Do not start Phase 1F implementation until its scope is planned and approved.
+The Phase 0 foundation baseline is in place. Phase 1E (Files) and Phase 1F-A (order line items) are complete. Do not start the next Phase 1F step implementation until its scope is planned and approved.
