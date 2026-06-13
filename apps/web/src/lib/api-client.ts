@@ -5,6 +5,8 @@ import {
   CreateSupplierInput,
   CreatePurchaseOrderInput,
   CustomerResponse,
+  FileResponse,
+  FileDownloadToken,
   LoginResponse,
   MeResponse,
   Paginated,
@@ -46,7 +48,10 @@ interface RequestOptions {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, auth = true } = options;
   const headers: Record<string, string> = {};
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
+  // For FormData, let the browser set Content-Type (with the multipart
+  // boundary). Only set application/json for plain object bodies.
+  if (body !== undefined && !isFormData) headers['Content-Type'] = 'application/json';
   if (auth) {
     const token = getToken();
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -55,7 +60,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const res = await fetch(path, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body:
+      body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
   });
 
   if (res.status === 401 && auth) {
@@ -253,5 +259,38 @@ export const apiClient = {
     return request<{ id: string; deleted: true }>(`/api/purchase-orders/${id}`, {
       method: 'DELETE',
     });
+  },
+  listFiles(query: {
+    page?: number;
+    pageSize?: number;
+    q?: string;
+    purpose?: string;
+  }): Promise<Paginated<FileResponse>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.purpose) params.set('purpose', query.purpose);
+    const qs = params.toString();
+    return request<Paginated<FileResponse>>(`/api/files${qs ? `?${qs}` : ''}`);
+  },
+  uploadFile(file: File, purpose?: string): Promise<FileResponse> {
+    const form = new FormData();
+    form.append('file', file);
+    if (purpose) form.append('purpose', purpose);
+    return request<FileResponse>('/api/files', { method: 'POST', body: form });
+  },
+  createFileToken(id: string): Promise<FileDownloadToken> {
+    return request<FileDownloadToken>(`/api/files/${id}/token`, { method: 'POST' });
+  },
+  deleteFile(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/files/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  // Mints a one-time token then returns the public download URL to navigate to.
+  async getFileDownloadUrl(id: string): Promise<string> {
+    const { token } = await apiClient.createFileToken(id);
+    return `/api/files/download?token=${encodeURIComponent(token)}`;
   },
 };

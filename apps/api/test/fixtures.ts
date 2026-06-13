@@ -27,6 +27,7 @@ export const ZERO_HASH = '0'.repeat(64);
 const CRM_MODULE_ID = 'a0000000-0000-0000-0000-000000000001';
 const ORDERS_MODULE_ID = 'a0000000-0000-0000-0000-000000000002';
 const PROCUREMENT_MODULE_ID = 'a0000000-0000-0000-0000-000000000003';
+const FILES_MODULE_ID = 'a0000000-0000-0000-0000-000000000005';
 const ADMIN_ROLE_ID = 'a1111111-1111-1111-1111-111111111111'; // tenant1, scope=all
 const SALES_ROLE_ID = 'a2222222-2222-2222-2222-222222222222'; // tenant1, scope=own
 const T2_ADMIN_ROLE_ID = 'a3333333-3333-3333-3333-333333333333'; // tenant2, scope=all
@@ -65,12 +66,16 @@ export const PROCUREMENT_ORDER_PERMS = [
   'procurement:delete',
 ] as const;
 
+// The permissions the files endpoints require (view/upload/download/delete).
+export const FILE_PERMS = ['files:view', 'files:upload', 'files:download', 'files:delete'] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
   ...ORDER_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
   ...SUPPLIER_PERMS.map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
   ...PROCUREMENT_ORDER_PERMS.map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
+  ...FILE_PERMS.map((code) => ({ code, moduleId: FILES_MODULE_ID })),
 ];
 
 interface RoleSpec {
@@ -166,9 +171,10 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       `INSERT INTO modules (id, code, name, sort_order) VALUES
          ($1, 'crm', '客户管理', 1),
          ($2, 'orders', '订单管理', 2),
-         ($3, 'procurement', '采购管理', 3)
+         ($3, 'procurement', '采购管理', 3),
+         ($4, 'files', '文件管理', 5)
        ON CONFLICT (code) DO NOTHING`,
-      [CRM_MODULE_ID, ORDERS_MODULE_ID, PROCUREMENT_MODULE_ID],
+      [CRM_MODULE_ID, ORDERS_MODULE_ID, PROCUREMENT_MODULE_ID, FILES_MODULE_ID],
     );
 
     for (const { code, moduleId } of SEED_PERMS) {

@@ -166,6 +166,22 @@ export interface UpdateSupplierInput {
   notes?: string;
 }
 
+export interface FileResponse {
+  id: string;
+  original_name: string;
+  mime_type: string;
+  size_bytes: string;
+  sha256: string;
+  purpose: string | null;
+  uploaded_by: string;
+  created_at: string;
+}
+
+export interface FileDownloadToken {
+  token: string;
+  expiresAt: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

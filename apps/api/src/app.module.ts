@@ -10,6 +10,8 @@ import { CustomersModule } from './customers/customers.module';
 import { SalesOrdersModule } from './sales-orders/sales-orders.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { StorageModule } from './storage/storage.module';
+import { FilesModule } from './files/files.module';
 
 @Module({
   imports: [
@@ -24,6 +26,8 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
     SalesOrdersModule,
     SuppliersModule,
     PurchaseOrdersModule,
+    StorageModule,
+    FilesModule,
   ],
 })
 export class AppModule {}

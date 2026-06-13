@@ -24,6 +24,7 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_tables:view', '查看提成表', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_tables:lock', '锁定提成表', 'lock'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_tables:unlock', '解锁提成表', 'unlock'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:view', '查看文件', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:upload', '上传文件', 'upload'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:download', '下载文件', 'download'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:delete', '删除文件', 'delete'),

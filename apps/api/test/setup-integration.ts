@@ -31,6 +31,16 @@ process.env.PLATFORM_JWT_SECRET = 'test-platform-jwt-secret';
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.APP_DATABASE_URL = TEST_APP_DATABASE_URL;
 
+// StorageModule's factory reads these at construction (loadStorageConfig throws
+// on missing vars). Integration tests that touch files override STORAGE_PROVIDER
+// with an in-memory fake, so no real S3/MinIO connection is ever made — these
+// placeholders only satisfy the env contract so the module instantiates.
+process.env.S3_ENDPOINT = process.env.S3_ENDPOINT ?? 'http://localhost:9000';
+process.env.S3_REGION = process.env.S3_REGION ?? 'us-east-1';
+process.env.S3_BUCKET = process.env.S3_BUCKET ?? 'kirindesk-files-test';
+process.env.S3_ACCESS_KEY = process.env.S3_ACCESS_KEY ?? 'test-access-key';
+process.env.S3_SECRET_KEY = process.env.S3_SECRET_KEY ?? 'test-secret-key';
+
 export { TEST_DB, TEST_DATABASE_URL };
 
 async function recreateTestDatabase(): Promise<void> {
