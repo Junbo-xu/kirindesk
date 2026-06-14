@@ -20,6 +20,12 @@ import {
 } from './sales-orders.errors';
 import { SalesOrderRow, SalesOrderResponse, toSalesOrderResponse } from './sales-orders.response';
 import { computeLineTotal, sumMoney, multiplyMoneyByRate } from '../common/order-money';
+import {
+  ApprovalAction,
+  assertTransition,
+  ApprovalScopeException,
+  SelfApprovalException,
+} from '../common/order-approval';
 
 export interface RequestActor {
   userId: string;
@@ -505,6 +511,151 @@ export class SalesOrdersService {
     });
   }
 
+  // ---- Phase 1F-C: approval workflow transitions -------------------------
+  // submit / approve / reject / withdraw. Each runs in one tenant-context
+  // transaction: SELECT ... FOR UPDATE the order, validate the legal transition
+  // (409 if illegal), enforce approval guards, UPDATE status, INSERT an
+  // immutable order_approvals ledger row, then audit after commit.
+
+  async submit(actor: RequestActor, id: string): Promise<SalesOrderResponse> {
+    return this.transition(actor, id, 'submit');
+  }
+
+  async approve(actor: RequestActor, id: string, reason?: string): Promise<SalesOrderResponse> {
+    return this.transition(actor, id, 'approve', reason);
+  }
+
+  async reject(actor: RequestActor, id: string, reason: string): Promise<SalesOrderResponse> {
+    return this.transition(actor, id, 'reject', reason);
+  }
+
+  async withdraw(actor: RequestActor, id: string, reason?: string): Promise<SalesOrderResponse> {
+    return this.transition(actor, id, 'withdraw', reason);
+  }
+
+  // Looks up the actor_user_id of the most recent 'submit' ledger row for this
+  // order (the submitter), used to enforce separation of duties on approve/
+  // reject. Returns null if no submit row is found (defensive — should not
+  // happen for a pending_approval order).
+  private async findSubmitter(client: PoolClient, orderId: string): Promise<string | null> {
+    const { rows } = await client.query<{ actor_user_id: string }>(
+      `SELECT actor_user_id FROM order_approvals
+        WHERE order_type = 'sales' AND order_id = $1 AND action = 'submit'
+        ORDER BY level DESC, created_at DESC
+        LIMIT 1`,
+      [orderId],
+    );
+    return rows[0]?.actor_user_id ?? null;
+  }
+
+  private async transition(
+    actor: RequestActor,
+    id: string,
+    action: ApprovalAction,
+    reason?: string,
+  ): Promise<SalesOrderResponse> {
+    const { before, after } = await withTenantContext(
+      this.pool,
+      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      async (client) => {
+        // Lock the order row for the duration of the transaction so two
+        // concurrent transitions serialize; the from-state is re-checked after
+        // the lock is held (the loser sees a non-matching status -> 409).
+        const params: unknown[] = [id];
+        let scopeClause = '';
+        if (this.restrictsToOwner(actor.dataScope)) {
+          params.push(actor.userId);
+          scopeClause = ' AND owner_user_id = $2';
+        }
+        const { rows } = await client.query<SalesOrderRow>(
+          `SELECT * FROM sales_orders WHERE id = $1 AND deleted_at IS NULL${scopeClause} FOR UPDATE`,
+          params,
+        );
+        if (rows.length === 0) {
+          throw new SalesOrderNotFoundException();
+        }
+        const existing = rows[0];
+
+        // Validate the legal from -> to transition (409 if illegal).
+        const toStatus = assertTransition(action, existing.status);
+
+        // Approval guards for approve/reject (§D3 / §7.2):
+        //   1. the orders:approve grant must be all-scoped (own-scope rejected);
+        //   2. separation of duties — the approver may not be the submitter.
+        if (action === 'approve' || action === 'reject') {
+          if (actor.dataScope !== 'all') {
+            throw new ApprovalScopeException();
+          }
+          const submitter = await this.findSubmitter(client, existing.id);
+          if (submitter !== null && submitter === actor.userId) {
+            throw new SelfApprovalException();
+          }
+        }
+
+        const { rows: updated } = await client.query<SalesOrderRow>(
+          `UPDATE sales_orders SET status = $1, updated_at = now()
+            WHERE id = $2 AND deleted_at IS NULL RETURNING *`,
+          [toStatus, existing.id],
+        );
+
+        // Append the immutable approval ledger row (level defaults to 1).
+        await client.query(
+          `INSERT INTO order_approvals
+             (tenant_id, order_type, order_id, action, from_status, to_status, actor_user_id, reason)
+           VALUES ($1, 'sales', $2, $3, $4, $5, $6, $7)`,
+          [
+            actor.tenantId,
+            existing.id,
+            action,
+            existing.status,
+            toStatus,
+            actor.userId,
+            reason ?? null,
+          ],
+        );
+
+        return { before: existing, after: updated[0] };
+      },
+    );
+
+    const afterResponse = toSalesOrderResponse(after);
+
+    await this.safeAudit({
+      tenantId: actor.tenantId,
+      actorId: actor.userId,
+      action: `sales_order.${this.auditVerb(action)}`,
+      resourceId: id,
+      before: { status: before.status },
+      after: {
+        status: after.status,
+        approval: {
+          action,
+          actor_user_id: actor.userId,
+          reason: reason ?? null,
+          level: 1,
+        },
+      },
+      reason: reason ?? null,
+    });
+
+    return afterResponse;
+  }
+
+  // Maps a transition action to its audit verb (sales_order.<verb>): submit ->
+  // submitted, approve -> approved, reject -> rejected, withdraw -> withdrawn.
+  private auditVerb(action: ApprovalAction): string {
+    switch (action) {
+      case 'submit':
+        return 'submitted';
+      case 'approve':
+        return 'approved';
+      case 'reject':
+        return 'rejected';
+      case 'withdraw':
+        return 'withdrawn';
+    }
+  }
+
   // Audit is recorded after the business transaction commits (separate
   // transaction). A failure here must NOT undo the committed business change;
   // we log it so the gap is visible. Append-only chain is enforced in the DB.
@@ -515,6 +666,7 @@ export class SalesOrdersService {
     resourceId: string;
     before?: unknown;
     after?: unknown;
+    reason?: string | null;
   }): Promise<void> {
     try {
       await this.auditService.log({
@@ -526,6 +678,7 @@ export class SalesOrdersService {
         resourceId: params.resourceId,
         before: params.before,
         after: params.after,
+        reason: params.reason ?? null,
       });
     } catch (err) {
       this.logger.error(

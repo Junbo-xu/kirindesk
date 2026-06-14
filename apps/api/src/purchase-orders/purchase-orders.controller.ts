@@ -22,6 +22,11 @@ import { PurchaseOrdersService, RequestActor } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ListPurchaseOrdersQuery } from './dto/list-purchase-orders.query';
+import {
+  ApproveOrderDto,
+  RejectOrderDto,
+  WithdrawOrderDto,
+} from '../common/dto/order-approval.dto';
 
 interface TenantJwtUser {
   sub: string;
@@ -87,6 +92,58 @@ export class PurchaseOrdersController {
       throw new BadRequestException('At least one updatable field is required');
     }
     return this.purchaseOrdersService.update(this.actor(user, req), id, dto);
+  }
+
+  // ---- Phase 1F-C: approval workflow transitions -------------------------
+  // submit/withdraw are editor actions (procurement:update); approve/reject are
+  // the privileged ones (procurement:approve, additionally requiring all-scope +
+  // approver != submitter, enforced in the service).
+
+  @Post(':id/submit')
+  @RequirePermission('procurement', 'update')
+  @HttpCode(200)
+  async submit(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.purchaseOrdersService.submit(this.actor(user, req), id);
+  }
+
+  @Post(':id/approve')
+  @RequirePermission('procurement', 'approve')
+  @HttpCode(200)
+  async approve(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApproveOrderDto,
+  ) {
+    return this.purchaseOrdersService.approve(this.actor(user, req), id, dto.reason);
+  }
+
+  @Post(':id/reject')
+  @RequirePermission('procurement', 'approve')
+  @HttpCode(200)
+  async reject(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectOrderDto,
+  ) {
+    return this.purchaseOrdersService.reject(this.actor(user, req), id, dto.reason);
+  }
+
+  @Post(':id/withdraw')
+  @RequirePermission('procurement', 'update')
+  @HttpCode(200)
+  async withdraw(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: WithdrawOrderDto,
+  ) {
+    return this.purchaseOrdersService.withdraw(this.actor(user, req), id, dto.reason);
   }
 
   @Delete(':id')
