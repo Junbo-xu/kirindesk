@@ -38,3 +38,26 @@ export function sumMoney(values: string[]): string {
   const s = cents.toString().padStart(3, '0');
   return `${s.slice(0, -2)}.${s.slice(-2)}`;
 }
+
+// Converts a numeric(18,2) money amount to a base currency by multiplying by a
+// numeric(18,8) exchange rate, rounded to 2 decimals (round-half-up). Pure
+// BigInt integer arithmetic so no floating point is involved.
+//   amount  scaled by 10^2  (cents)
+//   rate    scaled by 10^8
+//   base_cents = round( cents * rateScaled / 10^8 )
+// Inputs are DB/DTO-validated (amount is a derived total >= 0; rate > 0).
+export function multiplyMoneyByRate(amount: string, rate: string): string {
+  const scale = (s: string, places: number): bigint => {
+    const [intPart, fracPart = ''] = s.split('.');
+    const frac = (fracPart + '0'.repeat(places)).slice(0, places);
+    return BigInt(intPart + frac);
+  };
+  const cents = scale(amount, 2); // scaled by 10^2
+  const rateScaled = scale(rate, 8); // scaled by 10^8
+  const product = cents * rateScaled; // scaled by 10^10
+  const divisor = 10n ** 8n;
+  const half = divisor / 2n;
+  const baseCents = (product + half) / divisor; // scaled by 10^2
+  const s = baseCents.toString().padStart(3, '0');
+  return `${s.slice(0, -2)}.${s.slice(-2)}`;
+}

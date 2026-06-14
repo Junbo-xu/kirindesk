@@ -14,6 +14,13 @@ export interface PurchaseOrderRow {
   total_amount: string;
   status: string;
   notes: string | null;
+  // Phase 1F-B FX snapshot. NULL until a rate is frozen (drafts, header-only
+  // historical orders, or cross-currency orders never re-saved). numeric columns
+  // come back as strings.
+  fx_rate: string | null;
+  fx_rate_source: string | null;
+  fx_captured_at: Date | null;
+  total_amount_base: string | null;
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
@@ -28,6 +35,11 @@ export interface PurchaseOrderResponse {
   currency: string;
   total_amount: string;
   status: string;
+  // Phase 1F-B FX snapshot (original currency -> tenant base currency).
+  fx_rate: string | null;
+  fx_rate_source: string | null;
+  fx_captured_at: Date | null;
+  total_amount_base: string | null;
   created_at: Date;
   updated_at: Date;
   // Present on single-order responses (create/getOne/update); omitted from list
@@ -50,6 +62,10 @@ export function toPurchaseOrderResponse(row: PurchaseOrderRow): PurchaseOrderRes
     currency: row.currency,
     total_amount: row.total_amount,
     status: row.status,
+    fx_rate: row.fx_rate,
+    fx_rate_source: row.fx_rate_source,
+    fx_captured_at: row.fx_captured_at,
+    total_amount_base: row.total_amount_base,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

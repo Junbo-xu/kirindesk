@@ -19,7 +19,7 @@ import {
   OrderRequiresLineItemException,
 } from './sales-orders.errors';
 import { SalesOrderRow, SalesOrderResponse, toSalesOrderResponse } from './sales-orders.response';
-import { computeLineTotal, sumMoney } from '../common/order-money';
+import { computeLineTotal, sumMoney, multiplyMoneyByRate } from '../common/order-money';
 
 export interface RequestActor {
   userId: string;
@@ -34,9 +34,17 @@ export interface ListResult {
   total: number;
 }
 
+// Resolved FX snapshot to freeze on an order. rate is a numeric(18,8) string.
+interface FxSnapshot {
+  rate: string;
+  source: string; // 'manual' | 'mock' | 'system'
+}
+
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
 const UNIQUE_VIOLATION = '23505';
+// Tenant base currency falls back to RMB when no KV setting row exists.
+const DEFAULT_BASE_CURRENCY = 'RMB';
 
 @Injectable()
 export class SalesOrdersService {
@@ -115,6 +123,63 @@ export class SalesOrdersService {
     return rows;
   }
 
+  // Reads the tenant's base (reporting) currency from the existing key-value
+  // tenant_settings table (key='base_currency', value_json a JSON scalar string
+  // e.g. "RMB"). Falls back to RMB when no row exists. Runs inside the caller's
+  // tenant-context transaction so RLS scopes it to this tenant.
+  private async getBaseCurrency(client: PoolClient): Promise<string> {
+    const { rows } = await client.query<{ base_currency: string | null }>(
+      `SELECT value_json #>> '{}' AS base_currency
+         FROM tenant_settings
+        WHERE key = 'base_currency'
+        LIMIT 1`,
+    );
+    return rows[0]?.base_currency ?? DEFAULT_BASE_CURRENCY;
+  }
+
+  // Resolves the FX snapshot (rate + source) to freeze on an order, given the
+  // order's original currency. Resolution order:
+  //   1. original currency == base currency  -> rate 1, source 'system'.
+  //   2. a manual rate supplied on the DTO    -> that rate, source 'manual'.
+  //   3. otherwise look up exchange_rates for (base, quote=currency) for the
+  //      current month -> that rate, source 'mock'.
+  // Returns null when no rate can be determined (cross-currency, no manual rate,
+  // no exchange_rates row): the order is saved with a NULL FX snapshot, matching
+  // the nullable columns and the migration's "do not invent rates" stance.
+  private async resolveFx(
+    client: PoolClient,
+    currency: string,
+    manualRate: string | undefined,
+  ): Promise<FxSnapshot | null> {
+    const baseCurrency = await this.getBaseCurrency(client);
+
+    // Same currency: conversion is the identity, regardless of any supplied rate.
+    if (currency === baseCurrency) {
+      return { rate: '1', source: 'system' };
+    }
+
+    // Manual override wins over a looked-up rate.
+    if (manualRate !== undefined) {
+      return { rate: manualRate, source: 'manual' };
+    }
+
+    // Look up the most recent stored rate for this currency pair. exchange_rates
+    // is keyed (tenant, base_currency, quote_currency, year_month); take the
+    // latest by year_month. RLS scopes the read to this tenant.
+    const { rows } = await client.query<{ rate: string }>(
+      `SELECT rate FROM exchange_rates
+        WHERE base_currency = $1 AND quote_currency = $2
+        ORDER BY year_month DESC
+        LIMIT 1`,
+      [baseCurrency, currency],
+    );
+    if (rows.length > 0) {
+      return { rate: rows[0].rate, source: 'mock' };
+    }
+
+    return null;
+  }
+
   async create(actor: RequestActor, dto: CreateSalesOrderDto): Promise<SalesOrderResponse> {
     const items = dto.items ?? [];
     const status = dto.status ?? 'draft';
@@ -158,10 +223,23 @@ export class SalesOrdersService {
           const insertedItems = await this.insertItems(client, actor, header.id, items);
           const total = sumMoney(insertedItems.map((r) => r.line_total));
 
-          // Write the derived total back onto the header within the same tx.
+          // Freeze the FX snapshot for this order's original currency and derive
+          // the base-currency total from the frozen rate. When no rate can be
+          // resolved, all four FX columns stay NULL.
+          const fx = await this.resolveFx(client, dto.currency, dto.fx_rate);
+          const totalBase = fx ? multiplyMoneyByRate(total, fx.rate) : null;
+
+          // Write the derived total + FX snapshot back onto the header in the tx.
           const { rows: updated } = await client.query<SalesOrderRow>(
-            `UPDATE sales_orders SET total_amount = $1 WHERE id = $2 RETURNING *`,
-            [total, header.id],
+            `UPDATE sales_orders
+                SET total_amount = $1,
+                    fx_rate = $2,
+                    fx_rate_source = $3,
+                    fx_captured_at = CASE WHEN $2::numeric IS NULL THEN NULL ELSE now() END,
+                    total_amount_base = $4
+              WHERE id = $5
+              RETURNING *`,
+            [total, fx?.rate ?? null, fx?.source ?? null, totalBase, header.id],
           );
           return { header: updated[0], items: insertedItems };
         },
@@ -346,6 +424,23 @@ export class SalesOrdersService {
         const total = sumMoney(resultingItems.map((r) => r.line_total));
         params.push(total);
         sets.push(`total_amount = $${params.length}`);
+
+        // Re-freeze the FX snapshot against the resulting currency (which may
+        // have changed) and re-derive total_amount_base from the resolved rate.
+        // A supplied dto.fx_rate is treated as a manual override; otherwise the
+        // rate is re-resolved (same-currency=1, else exchange_rates lookup).
+        const resultingCurrency = dto.currency ?? existing.currency;
+        const fx = await this.resolveFx(client, resultingCurrency, dto.fx_rate);
+        const totalBase = fx ? multiplyMoneyByRate(total, fx.rate) : null;
+        params.push(fx?.rate ?? null);
+        sets.push(`fx_rate = $${params.length}`);
+        params.push(fx?.source ?? null);
+        sets.push(`fx_rate_source = $${params.length}`);
+        params.push(totalBase);
+        sets.push(`total_amount_base = $${params.length}`);
+        // captured_at tracks whether a rate is frozen: set when a rate exists,
+        // cleared when the snapshot resolves to NULL.
+        sets.push(`fx_captured_at = CASE WHEN ${fx ? 'TRUE' : 'FALSE'} THEN now() ELSE NULL END`);
 
         sets.push('updated_at = now()');
         params.push(existing.id);
