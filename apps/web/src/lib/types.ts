@@ -9,7 +9,33 @@ export interface LoginResponse {
 }
 
 export type Currency = 'RMB' | 'USD' | 'HKD' | 'EUR';
-export type OrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled';
+// Phase 1F-C adds the approval-workflow states (pending_approval/approved/
+// rejected) to the original lifecycle states. The new states are reachable only
+// via the approval transition endpoints, not the create/update status field.
+export type OrderStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'confirmed'
+  | 'completed'
+  | 'cancelled';
+
+// Chinese display labels for every order status. Single source of truth for
+// list rows, detail badges, and status filters across both order modules.
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  draft: '草稿',
+  pending_approval: '待审批',
+  approved: '已批准',
+  rejected: '已驳回',
+  confirmed: '已确认',
+  completed: '已完成',
+  cancelled: '已取消',
+};
+
+export function orderStatusLabel(status: string): string {
+  return ORDER_STATUS_LABELS[status as OrderStatus] ?? status;
+}
 
 // Supported tenant base (reporting) currencies. Mirrors the backend
 // SUPPORTED_BASE_CURRENCIES whitelist on the tenant-settings API.

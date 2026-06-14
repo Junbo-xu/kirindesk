@@ -149,6 +149,30 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
+  // Phase 1F-C approval transitions. Each POSTs to /:id/{action} and returns the
+  // updated order; reject requires a reason, submit/approve/withdraw take none
+  // (approve/withdraw accept an optional reason for the audit trail).
+  submitSalesOrder(id: string): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}/submit`, { method: 'POST' });
+  },
+  approveSalesOrder(id: string, reason?: string): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}/approve`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    });
+  },
+  rejectSalesOrder(id: string, reason: string): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}/reject`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+  withdrawSalesOrder(id: string, reason?: string): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/sales-orders/${id}/withdraw`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    });
+  },
   listCustomers(query: {
     page?: number;
     pageSize?: number;
@@ -251,6 +275,28 @@ export const apiClient = {
   deletePurchaseOrder(id: string): Promise<{ id: string; deleted: true }> {
     return request<{ id: string; deleted: true }>(`/api/purchase-orders/${id}`, {
       method: 'DELETE',
+    });
+  },
+  // Phase 1F-C approval transitions (symmetric with sales orders).
+  submitPurchaseOrder(id: string): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}/submit`, { method: 'POST' });
+  },
+  approvePurchaseOrder(id: string, reason?: string): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}/approve`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    });
+  },
+  rejectPurchaseOrder(id: string, reason: string): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}/reject`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+  withdrawPurchaseOrder(id: string, reason?: string): Promise<PurchaseOrderResponse> {
+    return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}/withdraw`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
     });
   },
   listFiles(query: {
