@@ -462,6 +462,154 @@ describe('Purchase Orders API (integration)', () => {
     expect(result.ok).toBe(true);
   });
 
+  // --- Phase 1F-B: FX snapshot (rate + source) + derived base total ---
+  // The test tenant seeds no base_currency row, so base currency defaults to
+  // RMB, and no exchange_rates rows exist unless a test inserts them.
+
+  // Inserts a tenant1 exchange_rates row (base RMB -> quote) for the mock path.
+  async function seedRate(quote: string, rate: string, yearMonth: string): Promise<void> {
+    await withAdmin(async (c) => {
+      await c.query(
+        `INSERT INTO exchange_rates
+           (tenant_id, base_currency, quote_currency, rate, year_month, source)
+         VALUES ($1, 'RMB', $2, $3, $4, 'manual')
+         ON CONFLICT (tenant_id, base_currency, quote_currency, year_month)
+         DO UPDATE SET rate = EXCLUDED.rate`,
+        [TEST_TENANT_ID, quote, rate, yearMonth],
+      );
+    });
+  }
+
+  let fxSameId: string; // RMB order (same currency)
+  let fxManualId: string; // USD order with manual rate
+  let fxMockId: string; // HKD order resolved via exchange_rates
+  let fxNullId: string; // EUR order with no rate available
+
+  it('same-currency order (RMB) freezes fx_rate=1 / source=system / base=total', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/purchase-orders')
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: adminSupplierId,
+        order_number: 'PO-FX-SAME',
+        currency: 'RMB',
+        items: [{ description: 'Domestic', quantity: '2', unit_price: '617.25' }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.total_amount).toBe('1234.50');
+    expect(res.body.fx_rate).toBe('1.00000000');
+    expect(res.body.fx_rate_source).toBe('system');
+    expect(res.body.total_amount_base).toBe('1234.50');
+    expect(res.body.fx_captured_at).not.toBeNull();
+    fxSameId = res.body.id;
+  });
+
+  it('manual fx_rate override freezes the value and derives base correctly', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/purchase-orders')
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: adminSupplierId,
+        order_number: 'PO-FX-MANUAL',
+        currency: 'USD',
+        fx_rate: '7.25',
+        // 1 * 100.00 = 100.00 total; base = 100.00 * 7.25 = 725.00
+        items: [{ description: 'Imported', quantity: '1', unit_price: '100' }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.total_amount).toBe('100.00');
+    expect(res.body.fx_rate).toBe('7.25000000');
+    expect(res.body.fx_rate_source).toBe('manual');
+    expect(res.body.total_amount_base).toBe('725.00');
+    fxManualId = res.body.id;
+  });
+
+  it('exchange_rates lookup hit freezes source=mock with the stored rate', async () => {
+    await seedRate('HKD', '0.92', '2099-01');
+    const res = await request(app.getHttpServer())
+      .post('/api/purchase-orders')
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: adminSupplierId,
+        order_number: 'PO-FX-MOCK',
+        currency: 'HKD',
+        // 1 * 200.00 = 200.00 total; base = 200.00 * 0.92 = 184.00
+        items: [{ description: 'HK goods', quantity: '1', unit_price: '200' }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.total_amount).toBe('200.00');
+    expect(res.body.fx_rate).toBe('0.92000000');
+    expect(res.body.fx_rate_source).toBe('mock');
+    expect(res.body.total_amount_base).toBe('184.00');
+    fxMockId = res.body.id;
+  });
+
+  it('no rate available (cross-currency, no manual, no exchange_rates) -> FX columns NULL', async () => {
+    const res = await request(app.getHttpServer())
+      .post('/api/purchase-orders')
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: adminSupplierId,
+        order_number: 'PO-FX-NULL',
+        currency: 'EUR',
+        items: [{ description: 'EU goods', quantity: '1', unit_price: '50' }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.total_amount).toBe('50.00');
+    expect(res.body.fx_rate).toBeNull();
+    expect(res.body.fx_rate_source).toBeNull();
+    expect(res.body.fx_captured_at).toBeNull();
+    expect(res.body.total_amount_base).toBeNull();
+    fxNullId = res.body.id;
+  });
+
+  it('updating fx_rate re-derives total_amount_base', async () => {
+    const res = await request(app.getHttpServer())
+      .patch(`/api/purchase-orders/${fxManualId}`)
+      .set(bearer(adminToken))
+      .send({ fx_rate: '7.5' });
+    expect(res.status).toBe(200);
+    // total unchanged (100.00); base = 100.00 * 7.5 = 750.00
+    expect(res.body.total_amount).toBe('100.00');
+    expect(res.body.fx_rate).toBe('7.50000000');
+    expect(res.body.fx_rate_source).toBe('manual');
+    expect(res.body.total_amount_base).toBe('750.00');
+  });
+
+  it('getOne returns the frozen FX snapshot fields', async () => {
+    const res = await request(app.getHttpServer())
+      .get(`/api/purchase-orders/${fxMockId}`)
+      .set(bearer(adminToken));
+    expect(res.status).toBe(200);
+    expect(res.body.fx_rate).toBe('0.92000000');
+    expect(res.body.fx_rate_source).toBe('mock');
+    expect(res.body.total_amount_base).toBe('184.00');
+  });
+
+  it('FX fields are captured in the audit after-snapshot', async () => {
+    const after = await withAdmin(async (c) => {
+      const r = await c.query(
+        `SELECT after_json FROM audit_logs
+         WHERE tenant_id = $1 AND resource_type = 'purchase_order'
+           AND action = 'purchase_order.created' AND resource_id = $2
+         ORDER BY id DESC LIMIT 1`,
+        [TEST_TENANT_ID, fxMockId],
+      );
+      return r.rows[0]?.after_json;
+    });
+    expect(after).toBeTruthy();
+    expect(after.fx_rate).toBe('0.92000000');
+    expect(after.fx_rate_source).toBe('mock');
+    expect(after.total_amount_base).toBe('184.00');
+  });
+
+  it('chain still verifies after FX order activity', async () => {
+    const result = await verifyChain(`tenant:${TEST_TENANT_ID}`);
+    expect(result.ok).toBe(true);
+    // Touch the null-FX order id so the lint/TS unused-var check stays clean.
+    expect(fxSameId && fxNullId).toBeTruthy();
+  });
+
   // --- direct DB RLS assertion (app role) ---
 
   it('RLS hides purchase_orders under no / wrong tenant context (app role)', async () => {
