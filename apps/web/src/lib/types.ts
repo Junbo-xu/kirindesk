@@ -270,6 +270,45 @@ export interface FileDownloadToken {
   expiresAt: string;
 }
 
+// ---- Phase 1F-D: reports ------------------------------------------------
+// Status caliber: which order states feed the summed amount (§2.3 of the plan).
+export type ReportCaliber = 'realized' | 'approved_up' | 'pipeline' | 'all';
+export type ReportGroupBy = 'status' | 'customer' | 'supplier' | 'period';
+export type ReportGranularity = 'month' | 'day';
+
+export const REPORT_CALIBER_LABELS: Record<ReportCaliber, string> = {
+  realized: '已实现（已确认+已完成）',
+  approved_up: '已批准及以上',
+  pipeline: '在途（草稿/待审批/已驳回）',
+  all: '全部（不含已取消）',
+};
+
+export interface ReportSummaryQuery {
+  from: string;
+  to: string;
+  groupBy?: ReportGroupBy;
+  granularity?: ReportGranularity;
+  caliber?: ReportCaliber;
+}
+
+// One grouped row: amounts are decimal strings in the tenant base currency.
+export interface ReportRow {
+  key: string;
+  label: string;
+  orderCount: number;
+  amountBase: string;
+  unCostedCount: number;
+}
+
+export interface ReportSummaryResponse {
+  caliber: ReportCaliber;
+  currency: Currency;
+  range: { from: string; to: string; granularity: ReportGranularity };
+  groupBy: ReportGroupBy;
+  rows: ReportRow[];
+  totals: { orderCount: number; amountBase: string; unCostedCount: number };
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

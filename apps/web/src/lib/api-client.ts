@@ -12,6 +12,8 @@ import {
   LoginResponse,
   MeResponse,
   Paginated,
+  ReportSummaryQuery,
+  ReportSummaryResponse,
   SalesOrderResponse,
   SupplierResponse,
   PurchaseOrderResponse,
@@ -341,4 +343,23 @@ export const apiClient = {
       body: { base_currency },
     });
   },
+  // Phase 1F-D reports: read-only aggregates. Amounts come back as decimal
+  // strings in the tenant base currency.
+  salesSummary(query: ReportSummaryQuery): Promise<ReportSummaryResponse> {
+    return request<ReportSummaryResponse>(`/api/reports/sales-summary${reportQs(query)}`);
+  },
+  purchaseSummary(query: ReportSummaryQuery): Promise<ReportSummaryResponse> {
+    return request<ReportSummaryResponse>(`/api/reports/purchase-summary${reportQs(query)}`);
+  },
 };
+
+function reportQs(query: ReportSummaryQuery): string {
+  const params = new URLSearchParams();
+  params.set('from', query.from);
+  params.set('to', query.to);
+  if (query.groupBy) params.set('groupBy', query.groupBy);
+  if (query.granularity) params.set('granularity', query.granularity);
+  if (query.caliber) params.set('caliber', query.caliber);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}

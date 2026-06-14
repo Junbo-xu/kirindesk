@@ -12,6 +12,7 @@ import { SalesOrderFormPage } from './sales-orders/SalesOrderFormPage';
 import { PurchaseOrdersListPage } from './purchase-orders/PurchaseOrdersListPage';
 import { PurchaseOrderFormPage } from './purchase-orders/PurchaseOrderFormPage';
 import { FilesListPage } from './files/FilesListPage';
+import { ReportsPage } from './reports/ReportsPage';
 import { SettingsPage } from './settings/SettingsPage';
 
 // Placeholder home for the Foundation phase.
@@ -41,6 +42,7 @@ export function App() {
               <Route path="/purchase-orders/new" element={<PurchaseOrderFormPage />} />
               <Route path="/purchase-orders/:id/edit" element={<PurchaseOrderFormPage />} />
               <Route path="/files" element={<FilesListPage />} />
+              <Route path="/reports" element={<ReportsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>
