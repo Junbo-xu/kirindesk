@@ -13,6 +13,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { StorageModule } from './storage/storage.module';
 import { FilesModule } from './files/files.module';
 import { TenantSettingsModule } from './tenant-settings/tenant-settings.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TenantSettingsModule } from './tenant-settings/tenant-settings.module';
     StorageModule,
     FilesModule,
     TenantSettingsModule,
+    ReportsModule,
   ],
 })
 export class AppModule {}
