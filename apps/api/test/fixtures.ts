@@ -41,13 +41,15 @@ export const CUSTOMER_PERMS = [
   'customers:delete',
 ] as const;
 
-// The four permissions the sales-orders endpoints require. approve/export are
-// seeded in production but intentionally not granted here (out of phase scope).
+// The sales-orders endpoints' permissions. Phase 1F-C adds orders:approve
+// (granted per-role at the role's scope below: admin=all, sales=own), used by
+// the approval-workflow transition endpoints. export is still out of scope.
 export const ORDER_PERMS = [
   'orders:view',
   'orders:create',
   'orders:update',
   'orders:delete',
+  'orders:approve',
 ] as const;
 
 // The four permissions the suppliers endpoints require.
@@ -58,13 +60,15 @@ export const SUPPLIER_PERMS = [
   'suppliers:delete',
 ] as const;
 
-// The four permissions the purchase-orders endpoints require. approve is seeded
-// in production but intentionally not granted here (out of phase scope).
+// The purchase-orders endpoints' permissions. Phase 1F-C adds
+// procurement:approve (granted per-role at the role's scope below), used by the
+// approval-workflow transition endpoints.
 export const PROCUREMENT_ORDER_PERMS = [
   'procurement:view',
   'procurement:create',
   'procurement:update',
   'procurement:delete',
+  'procurement:approve',
 ] as const;
 
 // The permissions the files endpoints require (view/upload/download/delete).
