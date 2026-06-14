@@ -141,6 +141,7 @@ export function PurchaseOrdersListPage() {
               <th style={th}>供应商</th>
               <th style={th}>币种</th>
               <th style={th}>金额</th>
+              <th style={th}>本位币金额</th>
               <th style={th}>状态</th>
               <th style={th}>创建时间</th>
               <th style={th}>操作</th>
@@ -153,6 +154,13 @@ export function PurchaseOrdersListPage() {
                 <td style={td}>{supplierName(o.supplier_id)}</td>
                 <td style={td}>{o.currency}</td>
                 <td style={td}>{o.total_amount}</td>
+                <td style={td}>
+                  {o.total_amount_base === null ? (
+                    <span style={{ color: '#999' }}>未冻结</span>
+                  ) : (
+                    o.total_amount_base
+                  )}
+                </td>
                 <td style={td}>{o.status}</td>
                 <td style={td}>{o.created_at}</td>
                 <td style={td}>
