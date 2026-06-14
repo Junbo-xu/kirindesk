@@ -11,6 +11,14 @@ export interface LoginResponse {
 export type Currency = 'RMB' | 'USD' | 'HKD' | 'EUR';
 export type OrderStatus = 'draft' | 'confirmed' | 'completed' | 'cancelled';
 
+// Supported tenant base (reporting) currencies. Mirrors the backend
+// SUPPORTED_BASE_CURRENCIES whitelist on the tenant-settings API.
+export const SUPPORTED_BASE_CURRENCIES: Currency[] = ['RMB', 'USD', 'HKD', 'EUR'];
+
+export interface BaseCurrencyResponse {
+  base_currency: Currency;
+}
+
 // A line item as sent to the API. line_no and line_total are derived
 // server-side, so they are not part of the input.
 export interface OrderItemInput {

@@ -1,9 +1,11 @@
 import {
   ApiError,
+  BaseCurrencyResponse,
   CreateCustomerInput,
   CreateSalesOrderInput,
   CreateSupplierInput,
   CreatePurchaseOrderInput,
+  Currency,
   CustomerResponse,
   FileResponse,
   FileDownloadToken,
@@ -60,8 +62,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const res = await fetch(path, {
     method,
     headers,
-    body:
-      body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
+    body: body === undefined ? undefined : isFormData ? (body as FormData) : JSON.stringify(body),
   });
 
   if (res.status === 401 && auth) {
@@ -126,9 +127,7 @@ export const apiClient = {
     if (query.status) params.set('status', query.status);
     if (query.customer_id) params.set('customer_id', query.customer_id);
     const qs = params.toString();
-    return request<Paginated<SalesOrderResponse>>(
-      `/api/sales-orders${qs ? `?${qs}` : ''}`,
-    );
+    return request<Paginated<SalesOrderResponse>>(`/api/sales-orders${qs ? `?${qs}` : ''}`);
   },
   getSalesOrder(id: string): Promise<SalesOrderResponse> {
     return request<SalesOrderResponse>(`/api/sales-orders/${id}`);
@@ -162,9 +161,7 @@ export const apiClient = {
     if (query.q) params.set('q', query.q);
     if (query.status) params.set('status', query.status);
     const qs = params.toString();
-    return request<Paginated<CustomerResponse>>(
-      `/api/customers${qs ? `?${qs}` : ''}`,
-    );
+    return request<Paginated<CustomerResponse>>(`/api/customers${qs ? `?${qs}` : ''}`);
   },
   getCustomer(id: string): Promise<CustomerResponse> {
     return request<CustomerResponse>(`/api/customers/${id}`);
@@ -198,9 +195,7 @@ export const apiClient = {
     if (query.q) params.set('q', query.q);
     if (query.status) params.set('status', query.status);
     const qs = params.toString();
-    return request<Paginated<SupplierResponse>>(
-      `/api/suppliers${qs ? `?${qs}` : ''}`,
-    );
+    return request<Paginated<SupplierResponse>>(`/api/suppliers${qs ? `?${qs}` : ''}`);
   },
   getSupplier(id: string): Promise<SupplierResponse> {
     return request<SupplierResponse>(`/api/suppliers/${id}`);
@@ -236,9 +231,7 @@ export const apiClient = {
     if (query.status) params.set('status', query.status);
     if (query.supplier_id) params.set('supplier_id', query.supplier_id);
     const qs = params.toString();
-    return request<Paginated<PurchaseOrderResponse>>(
-      `/api/purchase-orders${qs ? `?${qs}` : ''}`,
-    );
+    return request<Paginated<PurchaseOrderResponse>>(`/api/purchase-orders${qs ? `?${qs}` : ''}`);
   },
   getPurchaseOrder(id: string): Promise<PurchaseOrderResponse> {
     return request<PurchaseOrderResponse>(`/api/purchase-orders/${id}`);
@@ -292,5 +285,14 @@ export const apiClient = {
   async getFileDownloadUrl(id: string): Promise<string> {
     const { token } = await apiClient.createFileToken(id);
     return `/api/files/download?token=${encodeURIComponent(token)}`;
+  },
+  getBaseCurrency(): Promise<BaseCurrencyResponse> {
+    return request<BaseCurrencyResponse>('/api/tenant-settings/base-currency');
+  },
+  setBaseCurrency(base_currency: Currency): Promise<BaseCurrencyResponse> {
+    return request<BaseCurrencyResponse>('/api/tenant-settings/base-currency', {
+      method: 'PUT',
+      body: { base_currency },
+    });
   },
 };
