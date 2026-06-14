@@ -1,17 +1,21 @@
 import { CSSProperties, FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiClient } from '../lib/api-client';
-import { ApiError, OrderStatus, SalesOrderResponse } from '../lib/types';
+import {
+  ApiError,
+  OrderStatus,
+  ORDER_STATUS_LABELS,
+  orderStatusLabel,
+  SalesOrderResponse,
+} from '../lib/types';
 import { useCustomerOptions } from './useCustomerOptions';
 
 const PAGE_SIZE = 20;
 
-const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
-  { value: 'draft', label: '草稿' },
-  { value: 'confirmed', label: '已确认' },
-  { value: 'completed', label: '已完成' },
-  { value: 'cancelled', label: '已取消' },
-];
+// All statuses are filterable, including the approval-workflow states.
+const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = (
+  Object.keys(ORDER_STATUS_LABELS) as OrderStatus[]
+).map((value) => ({ value, label: ORDER_STATUS_LABELS[value] }));
 
 export function SalesOrdersListPage() {
   const { options: customers } = useCustomerOptions();
@@ -105,7 +109,11 @@ export function SalesOrdersListPage() {
     }
   }
 
-  const th: CSSProperties = { textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid #ddd' };
+  const th: CSSProperties = {
+    textAlign: 'left',
+    padding: '6px 8px',
+    borderBottom: '1px solid #ddd',
+  };
   const td: CSSProperties = { padding: '6px 8px', borderBottom: '1px solid #eee' };
 
   return (
@@ -114,18 +122,19 @@ export function SalesOrdersListPage() {
         <h1 style={{ fontSize: 20 }}>销售订单</h1>
         <Link to="/orders/new">新建订单</Link>
       </div>
-      <form onSubmit={applyFilters} style={{ display: 'flex', gap: 8, margin: '12px 0', alignItems: 'center' }}>
+      <form
+        onSubmit={applyFilters}
+        style={{ display: 'flex', gap: 8, margin: '12px 0', alignItems: 'center' }}
+      >
         <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
           <option value="">全部状态</option>
           {STATUS_OPTIONS.map((s) => (
-            <option key={s.value} value={s.value}>{s.label}</option>
+            <option key={s.value} value={s.value}>
+              {s.label}
+            </option>
           ))}
         </select>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="搜索订单号 / PI 号"
-        />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索订单号 / PI 号" />
         <button type="submit">筛选</button>
       </form>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
@@ -161,7 +170,7 @@ export function SalesOrdersListPage() {
                     o.total_amount_base
                   )}
                 </td>
-                <td style={td}>{o.status}</td>
+                <td style={td}>{orderStatusLabel(o.status)}</td>
                 <td style={td}>{o.created_at}</td>
                 <td style={td}>
                   <Link to={`/orders/${o.id}/edit`}>编辑</Link>{' '}
@@ -173,9 +182,15 @@ export function SalesOrdersListPage() {
         </table>
       )}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 12 }}>
-        <button onClick={() => setPage(page - 1)} disabled={page <= 1}>上一页</button>
-        <span>第 {page} / {totalPages} 页</span>
-        <button onClick={() => setPage(page + 1)} disabled={page >= totalPages}>下一页</button>
+        <button onClick={() => setPage(page - 1)} disabled={page <= 1}>
+          上一页
+        </button>
+        <span>
+          第 {page} / {totalPages} 页
+        </span>
+        <button onClick={() => setPage(page + 1)} disabled={page >= totalPages}>
+          下一页
+        </button>
       </div>
     </div>
   );

@@ -7,9 +7,11 @@ import {
   CreateSalesOrderInput,
   OrderItemInput,
   OrderStatus,
+  ORDER_STATUS_LABELS,
   UpdateSalesOrderInput,
 } from '../lib/types';
 import { computeLineTotal, sumMoney } from '../lib/order-money';
+import { OrderApprovalActions } from '../components/OrderApprovalActions';
 import { useCustomerOptions } from './useCustomerOptions';
 
 const CURRENCY_OPTIONS: Currency[] = ['RMB', 'USD', 'HKD', 'EUR'];
@@ -39,11 +41,14 @@ const UNIT_PRICE_RE = /^\d{1,14}(\.\d{1,4})?$/;
 // fx_rate: numeric(18,8), strictly positive. Mirrors the server-side DTO regex.
 const FX_RATE_RE = /^(?!0+(\.0+)?$)\d{1,10}(\.\d{1,8})?$/;
 
+// Statuses settable directly via the create/update form. The approval-workflow
+// states (pending_approval/approved/rejected) are reachable only through the
+// transition endpoints, so they are not offered here (matches the server DTO).
 const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
-  { value: 'draft', label: '草稿' },
-  { value: 'confirmed', label: '已确认' },
-  { value: 'completed', label: '已完成' },
-  { value: 'cancelled', label: '已取消' },
+  { value: 'draft', label: ORDER_STATUS_LABELS.draft },
+  { value: 'confirmed', label: ORDER_STATUS_LABELS.confirmed },
+  { value: 'completed', label: ORDER_STATUS_LABELS.completed },
+  { value: 'cancelled', label: ORDER_STATUS_LABELS.cancelled },
 ];
 
 export function SalesOrderFormPage() {
@@ -122,6 +127,11 @@ export function SalesOrderFormPage() {
   // Derived read-only total = Σ line_total, matching the server's derivation.
   const lineTotals = items.map((r) => computeLineTotal(r.quantity, r.unit_price));
   const derivedTotal = sumMoney(lineTotals);
+
+  // Order is in an approval-workflow state (managed via the transition actions,
+  // not the editable status select).
+  const isApprovalState =
+    status === 'pending_approval' || status === 'approved' || status === 'rejected';
 
   function updateRow(index: number, patch: Partial<ItemRow>) {
     setItems((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -264,7 +274,9 @@ export function SalesOrderFormPage() {
             >
               <option value="">请选择客户</option>
               {customers.map((c) => (
-                <option key={c.id} value={c.id}>{c.company_name}</option>
+                <option key={c.id} value={c.id}>
+                  {c.company_name}
+                </option>
               ))}
             </select>
           )}
@@ -284,7 +296,9 @@ export function SalesOrderFormPage() {
             />
           )}
         </label>
-        {orderNumberError && <p style={{ color: 'crimson', margin: '4px 0' }}>{orderNumberError}</p>}
+        {orderNumberError && (
+          <p style={{ color: 'crimson', margin: '4px 0' }}>{orderNumberError}</p>
+        )}
         <label style={labelStyle}>
           PI 号（选填）
           <input
@@ -302,7 +316,9 @@ export function SalesOrderFormPage() {
             style={{ width: '100%' }}
           >
             {CURRENCY_OPTIONS.map((c) => (
-              <option key={c} value={c}>{c}</option>
+              <option key={c} value={c}>
+                {c}
+              </option>
             ))}
           </select>
         </label>
@@ -363,7 +379,12 @@ export function SalesOrderFormPage() {
                 </label>
                 <label style={{ fontSize: 13 }}>
                   小计
-                  <input value={lineTotal ?? '—'} readOnly tabIndex={-1} style={{ width: '100%', background: '#f5f5f5' }} />
+                  <input
+                    value={lineTotal ?? '—'}
+                    readOnly
+                    tabIndex={-1}
+                    style={{ width: '100%', background: '#f5f5f5' }}
+                  />
                 </label>
                 <button type="button" onClick={() => removeRow(i)} title="删除该行">
                   删除
@@ -374,7 +395,12 @@ export function SalesOrderFormPage() {
         </div>
         <label style={labelStyle}>
           总金额（自动汇总，不可手填）
-          <input value={derivedTotal} readOnly tabIndex={-1} style={{ width: '100%', background: '#f5f5f5' }} />
+          <input
+            value={derivedTotal}
+            readOnly
+            tabIndex={-1}
+            style={{ width: '100%', background: '#f5f5f5' }}
+          />
         </label>
         <label style={labelStyle}>
           汇率（选填，原币种 → 本位币）
@@ -409,16 +435,29 @@ export function SalesOrderFormPage() {
         </p>
         <label style={labelStyle}>
           状态{isEdit ? '' : '（选填，默认草稿）'}
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            style={{ width: '100%' }}
-          >
-            {!isEdit && <option value="">默认（草稿）</option>}
-            {STATUS_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
+          {isApprovalState ? (
+            // pending_approval/approved/rejected are managed via the approval
+            // actions below, not editable here.
+            <input
+              value={ORDER_STATUS_LABELS[status as OrderStatus] ?? status}
+              readOnly
+              tabIndex={-1}
+              style={{ width: '100%', background: '#f5f5f5' }}
+            />
+          ) : (
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              style={{ width: '100%' }}
+            >
+              {!isEdit && <option value="">默认（草稿）</option>}
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          )}
         </label>
         <label style={labelStyle}>
           备注（选填）
@@ -435,9 +474,23 @@ export function SalesOrderFormPage() {
           <button type="submit" disabled={submitting}>
             {submitting ? '提交中…' : isEdit ? '保存' : '创建'}
           </button>
-          <button type="button" onClick={() => navigate('/orders')}>取消</button>
+          <button type="button" onClick={() => navigate('/orders')}>
+            取消
+          </button>
         </div>
       </form>
+      {isEdit && id && (
+        <OrderApprovalActions
+          status={status as OrderStatus}
+          handlers={{
+            submit: () => apiClient.submitSalesOrder(id),
+            approve: (reason) => apiClient.approveSalesOrder(id, reason),
+            reject: (reason) => apiClient.rejectSalesOrder(id, reason),
+            withdraw: (reason) => apiClient.withdrawSalesOrder(id, reason),
+          }}
+          onTransitioned={(next) => setStatus(next)}
+        />
+      )}
     </div>
   );
 }
