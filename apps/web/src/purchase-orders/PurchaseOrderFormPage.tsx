@@ -36,6 +36,8 @@ const EMPTY_ROW: ItemRow = {
 
 const QUANTITY_RE = /^\d{1,15}(\.\d{1,3})?$/;
 const UNIT_PRICE_RE = /^\d{1,14}(\.\d{1,4})?$/;
+// fx_rate: numeric(18,8), strictly positive. Mirrors the server-side DTO regex.
+const FX_RATE_RE = /^(?!0+(\.0+)?$)\d{1,10}(\.\d{1,8})?$/;
 
 const STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
   { value: 'draft', label: '草稿' },
@@ -58,6 +60,13 @@ export function PurchaseOrderFormPage() {
   const [status, setStatus] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Phase 1F-B FX. fxRate is an optional manual override input (blank = let the
+  // server resolve). The frozen snapshot fields are read-only, populated from the
+  // last server response (on load for edit; not known until first save on create).
+  const [fxRate, setFxRate] = useState('');
+  const [frozenBase, setFrozenBase] = useState<string | null>(null);
+  const [frozenSource, setFrozenSource] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(isEdit);
   const [error, setError] = useState<string | null>(null);
   const [orderNumberError, setOrderNumberError] = useState<string | null>(null);
@@ -78,6 +87,11 @@ export function PurchaseOrderFormPage() {
         setPiNumber(o.pi_number ?? '');
         setCurrency(o.currency);
         setStatus(o.status);
+        // Echo the frozen FX snapshot. Prefill the editable rate with the frozen
+        // value so re-saving keeps it unless the user clears/changes it.
+        setFxRate(o.fx_rate ?? '');
+        setFrozenBase(o.total_amount_base);
+        setFrozenSource(o.fx_rate_source);
         // Echo existing line items (ordered by line_no from the API).
         setItems(
           (o.items ?? []).map((it) => ({
@@ -183,6 +197,14 @@ export function PurchaseOrderFormPage() {
       return;
     }
 
+    // Optional manual rate: validate only when provided. Blank means "let the
+    // server resolve" (same-currency=1 or exchange_rates lookup).
+    const fxTrimmed = fxRate.trim();
+    if (fxTrimmed !== '' && !FX_RATE_RE.test(fxTrimmed)) {
+      setError('汇率格式不正确（正数，最多 8 位小数）');
+      return;
+    }
+
     setSubmitting(true);
     try {
       if (isEdit && id) {
@@ -193,7 +215,10 @@ export function PurchaseOrderFormPage() {
           notes: notes.trim() === '' ? undefined : notes.trim(),
           items: builtItems,
         };
-        await apiClient.updatePurchaseOrder(id, body);
+        if (fxTrimmed !== '') body.fx_rate = fxTrimmed;
+        const updated = await apiClient.updatePurchaseOrder(id, body);
+        setFrozenBase(updated.total_amount_base);
+        setFrozenSource(updated.fx_rate_source);
       } else {
         const body: CreatePurchaseOrderInput = {
           supplier_id: supplierId,
@@ -204,6 +229,7 @@ export function PurchaseOrderFormPage() {
         if (piNumber.trim() !== '') body.pi_number = piNumber.trim();
         if (status !== '') body.status = status as OrderStatus;
         if (notes.trim() !== '') body.notes = notes.trim();
+        if (fxTrimmed !== '') body.fx_rate = fxTrimmed;
         await apiClient.createPurchaseOrder(body);
       }
       navigate('/purchase-orders');
@@ -350,6 +376,37 @@ export function PurchaseOrderFormPage() {
           总金额（自动汇总，不可手填）
           <input value={derivedTotal} readOnly tabIndex={-1} style={{ width: '100%', background: '#f5f5f5' }} />
         </label>
+        <label style={labelStyle}>
+          汇率（选填，原币种 → 本位币）
+          <input
+            value={fxRate}
+            onChange={(e) => setFxRate(e.target.value)}
+            placeholder="留空则由系统按同币种/汇率表解析（最多 8 位小数）"
+            style={{ width: '100%' }}
+          />
+        </label>
+        <label style={labelStyle}>
+          本位币金额（冻结快照，不可手填）
+          <input
+            value={frozenBase ?? '—'}
+            readOnly
+            tabIndex={-1}
+            style={{ width: '100%', background: '#f5f5f5' }}
+          />
+        </label>
+        <p style={{ color: '#666', fontSize: 12, margin: '4px 0' }}>
+          {frozenBase === null
+            ? '尚未冻结汇率快照（草稿或暂无可用汇率，保存后可能生成）。'
+            : `汇率来源：${
+                frozenSource === 'system'
+                  ? '同币种（=1）'
+                  : frozenSource === 'manual'
+                    ? '手动录入'
+                    : frozenSource === 'mock'
+                      ? '汇率表'
+                      : (frozenSource ?? '—')
+              }`}
+        </p>
         <label style={labelStyle}>
           状态{isEdit ? '' : '（选填，默认草稿）'}
           <select

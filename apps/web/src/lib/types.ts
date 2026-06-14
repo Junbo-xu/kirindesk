@@ -44,6 +44,12 @@ export interface SalesOrderResponse {
   currency: Currency;
   total_amount: string;
   status: OrderStatus;
+  // Phase 1F-B FX snapshot (original currency -> tenant base currency). NULL
+  // until a rate is frozen (draft/cross-currency with no resolvable rate).
+  fx_rate: string | null;
+  fx_rate_source: string | null;
+  fx_captured_at: string | null;
+  total_amount_base: string | null;
   created_at: string;
   updated_at: string;
   // Present on single-order responses (getOne/create/update), not in list rows.
@@ -64,6 +70,9 @@ export interface CreateSalesOrderInput {
   pi_number?: string;
   status?: OrderStatus;
   notes?: string;
+  // Optional manual exchange rate (original -> base). Omit to let the server
+  // resolve it (same-currency=1, else exchange_rates lookup).
+  fx_rate?: string;
   // total_amount is derived server-side from items; never sent by the client.
   items?: OrderItemInput[];
 }
@@ -73,6 +82,8 @@ export interface UpdateSalesOrderInput {
   currency?: Currency;
   status?: OrderStatus;
   notes?: string;
+  // Optional manual exchange rate; omit to let the server re-resolve it.
+  fx_rate?: string;
   // When present, replaces the order's full line set (server re-derives total).
   items?: OrderItemInput[];
 }
@@ -96,6 +107,12 @@ export interface PurchaseOrderResponse {
   currency: Currency;
   total_amount: string;
   status: OrderStatus;
+  // Phase 1F-B FX snapshot (original currency -> tenant base currency). NULL
+  // until a rate is frozen (draft/cross-currency with no resolvable rate).
+  fx_rate: string | null;
+  fx_rate_source: string | null;
+  fx_captured_at: string | null;
+  total_amount_base: string | null;
   created_at: string;
   updated_at: string;
   // Present on single-order responses (getOne/create/update), not in list rows.
@@ -109,6 +126,9 @@ export interface CreatePurchaseOrderInput {
   pi_number?: string;
   status?: OrderStatus;
   notes?: string;
+  // Optional manual exchange rate (original -> base). Omit to let the server
+  // resolve it (same-currency=1, else exchange_rates lookup).
+  fx_rate?: string;
   // total_amount is derived server-side from items; never sent by the client.
   items?: OrderItemInput[];
 }
@@ -118,6 +138,8 @@ export interface UpdatePurchaseOrderInput {
   currency?: Currency;
   status?: OrderStatus;
   notes?: string;
+  // Optional manual exchange rate; omit to let the server re-resolve it.
+  fx_rate?: string;
   // When present, replaces the order's full line set (server re-derives total).
   items?: OrderItemInput[];
 }
