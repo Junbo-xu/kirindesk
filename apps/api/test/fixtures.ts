@@ -27,6 +27,7 @@ export const ZERO_HASH = '0'.repeat(64);
 const CRM_MODULE_ID = 'a0000000-0000-0000-0000-000000000001';
 const ORDERS_MODULE_ID = 'a0000000-0000-0000-0000-000000000002';
 const PROCUREMENT_MODULE_ID = 'a0000000-0000-0000-0000-000000000003';
+const FINANCE_MODULE_ID = 'a0000000-0000-0000-0000-000000000004';
 const FILES_MODULE_ID = 'a0000000-0000-0000-0000-000000000005';
 const SYSTEM_MODULE_ID = 'a0000000-0000-0000-0000-000000000007';
 const ADMIN_ROLE_ID = 'a1111111-1111-1111-1111-111111111111'; // tenant1, scope=all
@@ -77,6 +78,21 @@ export const FILE_PERMS = ['files:view', 'files:upload', 'files:download', 'file
 // The permissions the tenant-settings endpoints require (system module).
 export const TENANT_SETTINGS_PERMS = ['tenant_settings:view', 'tenant_settings:update'] as const;
 
+// Phase 1F-E commission rate tables / settlements (finance module).
+export const COMMISSION_PERMS = [
+  'commission_tables:view',
+  'commission_tables:lock',
+  'commission_tables:unlock',
+] as const;
+
+// Phase 1F-F payout / disbursement (finance module). Separate codes so the
+// disburse / reverse duties are independently grantable (separation of duties).
+export const COMMISSION_PAYOUT_PERMS = [
+  'commission_payouts:view',
+  'commission_payouts:disburse',
+  'commission_payouts:reverse',
+] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -85,6 +101,8 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...PROCUREMENT_ORDER_PERMS.map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
   ...FILE_PERMS.map((code) => ({ code, moduleId: FILES_MODULE_ID })),
   ...TENANT_SETTINGS_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
+  ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
 ];
 
 interface RoleSpec {
@@ -182,9 +200,17 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
          ($2, 'orders', '订单管理', 2),
          ($3, 'procurement', '采购管理', 3),
          ($4, 'files', '文件管理', 5),
-         ($5, 'system', '系统管理', 7)
+         ($5, 'system', '系统管理', 7),
+         ($6, 'finance', '财务管理', 4)
        ON CONFLICT (code) DO NOTHING`,
-      [CRM_MODULE_ID, ORDERS_MODULE_ID, PROCUREMENT_MODULE_ID, FILES_MODULE_ID, SYSTEM_MODULE_ID],
+      [
+        CRM_MODULE_ID,
+        ORDERS_MODULE_ID,
+        PROCUREMENT_MODULE_ID,
+        FILES_MODULE_ID,
+        SYSTEM_MODULE_ID,
+        FINANCE_MODULE_ID,
+      ],
     );
 
     for (const { code, moduleId } of SEED_PERMS) {

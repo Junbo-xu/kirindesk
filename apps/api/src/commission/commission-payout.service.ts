@@ -89,7 +89,9 @@ export class CommissionPayoutService {
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        // Lock the settlement row so concurrent creates serialise (§3 D5/D6).
+        // A locked settlement is immutable (append-only table, SELECT/INSERT
+        // only — no row lock is takeable here), so concurrent creates serialise
+        // on the partial unique index on commission_payouts instead (§3 D5).
         // 404 if the settlement isn't in the caller's tenant (RLS) or absent.
         const settlement = await client.query<{
           id: string;
@@ -97,7 +99,7 @@ export class CommissionPayoutService {
           total_commission_base: string;
         }>(
           `SELECT id, status, total_commission_base::text AS total_commission_base
-             FROM commission_settlements WHERE id = $1 FOR UPDATE`,
+             FROM commission_settlements WHERE id = $1`,
           [dto.settlementId],
         );
         if (settlement.rows.length === 0) throw new NotFoundException('Settlement not found');
