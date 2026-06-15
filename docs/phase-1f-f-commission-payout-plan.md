@@ -1,8 +1,24 @@
-# Phase 1F-F — Commission Payout / Disbursement (Planning)
+# Phase 1F-F — Commission Payout / Disbursement
 
-> Status: **Planning only.** No migration, no code, no commit until this plan is
-> reviewed and approved. Mirrors the structure of
-> `phase-1f-e-commission-plan.md` and `phase-1f-d-reports-plan.md`.
+> Status: **Implemented.** Backend (migration 034 + payout module) and frontend
+> (payout pages) are complete, merged to `main`, and pass `pnpm verify`. Mirrors
+> the structure of `phase-1f-e-commission-plan.md` and `phase-1f-d-reports-plan.md`.
+>
+> Delivered:
+> - **DB** — `feat(db): add commission payout tables migration (Phase 1F-F)`
+>   (`bad183d`): `commission_payouts` + `commission_payout_lines`, FORCE RLS,
+>   partial-unique no-double-pay index, SELECT/INSERT/UPDATE grants (DELETE
+>   revoked), and the freeze-money-columns triggers (§3 D7).
+> - **RBAC** — `feat(rbac): seed commission payout permission codes (Phase 1F-F)`
+>   (`6baf4d1`): `commission_payouts:view` / `:disburse` / `:reverse`, separate
+>   from `commission_tables:*` (separation of duties).
+> - **API** — `feat(api): add commission payout backend module (Phase 1F-F)`
+>   (`bb8631a`): `CommissionPayoutService` + controller + DTOs — amount-copy,
+>   idempotent create, only-locked-payable, row-locked status machine, void,
+>   dataScope-aware reads, audit on every write.
+> - **Web** — `feat(web): add commission payout pages (Phase 1F-F)` (`b30d5f3`):
+>   payouts list + detail with disburse/reverse actions, generate-or-view from
+>   settlement detail, base-currency display, graceful 403 fallback.
 >
 > Builds directly on completed work:
 > - **1F-E** — commission calculation, rate tables, and the lock/settle snapshot.
