@@ -14,6 +14,7 @@ import { StorageModule } from './storage/storage.module';
 import { FilesModule } from './files/files.module';
 import { TenantSettingsModule } from './tenant-settings/tenant-settings.module';
 import { ReportsModule } from './reports/reports.module';
+import { CommissionModule } from './commission/commission.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { ReportsModule } from './reports/reports.module';
     FilesModule,
     TenantSettingsModule,
     ReportsModule,
+    CommissionModule,
   ],
 })
 export class AppModule {}
