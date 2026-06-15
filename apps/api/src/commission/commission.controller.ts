@@ -2,20 +2,23 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
   Put,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { CommissionService, RequestActor } from './commission.service';
+import { CommissionPayoutService } from './commission-payout.service';
 import { CommissionQuery } from './dto/commission-query.dto';
 import {
   CreateCommissionTableDto,
@@ -23,6 +26,7 @@ import {
   UpdateCommissionTableDto,
 } from './dto/commission-table.dto';
 import { CreateSettlementDto, UnlockSettlementDto } from './dto/settlement.dto';
+import { CreatePayoutDto, ListPayoutsQuery, PayBatchDto, VoidPayoutDto } from './dto/payout.dto';
 
 interface TenantJwtUser {
   sub: string;
@@ -32,7 +36,10 @@ interface TenantJwtUser {
 @Controller('api/commission')
 @UseGuards(TenantAuthGuard, PermissionGuard)
 export class CommissionController {
-  constructor(private readonly commission: CommissionService) {}
+  constructor(
+    private readonly commission: CommissionService,
+    private readonly payouts: CommissionPayoutService,
+  ) {}
 
   private actor(user: TenantJwtUser, req: Request): RequestActor {
     return {
@@ -147,5 +154,78 @@ export class CommissionController {
     @Body() dto: UnlockSettlementDto,
   ) {
     return this.commission.unlockSettlement(this.actor(user, req), id, dto);
+  }
+
+  // ---- Payouts / disbursement (plan §5) --------------------------------------
+
+  // 201 on a fresh create, 200 when an existing live payout is returned
+  // idempotently (plan §5.1).
+  @Post('payouts')
+  @RequirePermission('commission_payouts', 'disburse')
+  async createPayout(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @Body() dto: CreatePayoutDto,
+  ) {
+    const result = await this.payouts.create(this.actor(user, req), dto);
+    res.status(result.created ? 201 : 200);
+    return result.payout;
+  }
+
+  @Get('payouts')
+  @RequirePermission('commission_payouts', 'view')
+  async listPayouts(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Query() query: ListPayoutsQuery,
+  ) {
+    return this.payouts.list(this.actor(user, req), query);
+  }
+
+  @Get('payouts/:id')
+  @RequirePermission('commission_payouts', 'view')
+  async getPayout(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id') id: string,
+  ) {
+    return this.payouts.getDetail(this.actor(user, req), id);
+  }
+
+  @Post('payouts/:id/lines/:lineId/pay')
+  @HttpCode(200)
+  @RequirePermission('commission_payouts', 'disburse')
+  async payPayoutLine(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ) {
+    return this.payouts.payLine(this.actor(user, req), id, lineId);
+  }
+
+  @Post('payouts/:id/pay')
+  @HttpCode(200)
+  @RequirePermission('commission_payouts', 'disburse')
+  async payPayout(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: PayBatchDto,
+  ) {
+    return this.payouts.payBatch(this.actor(user, req), id, dto);
+  }
+
+  @Post('payouts/:id/void')
+  @HttpCode(200)
+  @RequirePermission('commission_payouts', 'reverse')
+  async voidPayout(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() dto: VoidPayoutDto,
+  ) {
+    return this.payouts.void(this.actor(user, req), id, dto);
   }
 }
