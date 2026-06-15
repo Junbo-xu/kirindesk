@@ -309,6 +309,133 @@ export interface ReportSummaryResponse {
   totals: { orderCount: number; amountBase: string; unCostedCount: number };
 }
 
+// ---- Phase 1F-E commission -------------------------------------------------
+// Commission reuses the 1F-D status caliber verbatim. Amounts are decimal
+// strings in the tenant base currency; the frontend never recomputes them.
+export type CommissionCaliber = ReportCaliber;
+export type CommissionRateSource = 'rule' | 'default' | 'none';
+
+export const COMMISSION_CALIBER_LABELS: Record<CommissionCaliber, string> = REPORT_CALIBER_LABELS;
+
+export interface CommissionQuery {
+  from: string;
+  to: string;
+  caliber?: CommissionCaliber;
+  tableId?: string;
+  salespersonId?: string;
+}
+
+interface CommissionEnvelope {
+  caliber: CommissionCaliber;
+  currency: Currency;
+  range: { from: string; to: string };
+  tableId: string | null;
+  locked: boolean;
+}
+
+export interface CommissionSummaryRow {
+  salespersonId: string;
+  salespersonName: string;
+  basisBase: string;
+  rateApplied: string;
+  rateSource: CommissionRateSource;
+  commissionBase: string;
+  orderCount: number;
+  unCostedCount: number;
+}
+
+export interface CommissionSummaryResponse extends CommissionEnvelope {
+  rows: CommissionSummaryRow[];
+  totals: { basisBase: string; commissionBase: string; orderCount: number; unCostedCount: number };
+}
+
+export interface CommissionOrderRow {
+  orderId: string;
+  orderNumber: string;
+  orderType: 'sales' | 'purchase';
+  salespersonId: string;
+  salespersonName: string;
+  amountBase: string | null;
+  rateApplied: string;
+  rateSource: CommissionRateSource;
+  commissionBase: string;
+  status: string;
+}
+
+export interface CommissionOrdersResponse extends CommissionEnvelope {
+  rows: CommissionOrderRow[];
+  totals: { basisBase: string; commissionBase: string; orderCount: number; unCostedCount: number };
+}
+
+export interface CommissionRule {
+  salespersonId: string;
+  rate: string;
+}
+
+export interface CommissionTable {
+  id: string;
+  name: string;
+  default_rate: string;
+  status: 'active' | 'archived';
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CommissionTableDetail extends CommissionTable {
+  rules: CommissionRule[];
+}
+
+export interface CreateCommissionTableInput {
+  name: string;
+  defaultRate?: string;
+  rules?: CommissionRule[];
+}
+
+export interface UpdateCommissionTableInput {
+  name?: string;
+  defaultRate?: string;
+  status?: 'active' | 'archived';
+}
+
+export interface ReplaceCommissionRulesInput {
+  rules: CommissionRule[];
+}
+
+export interface CommissionSettlement {
+  id: string;
+  commission_table_id: string;
+  period_start: string;
+  period_end: string;
+  caliber: CommissionCaliber;
+  status: 'locked' | 'unlocked';
+  total_commission_base: string;
+  total_basis_base: string;
+  uncosted_count: number;
+}
+
+export interface CommissionSettlementLine {
+  salesperson_user_id: string;
+  salesperson_name: string | null;
+  basis_base: string;
+  rate_applied: string;
+  commission_base: string;
+  order_count: number;
+  uncosted_count: number;
+}
+
+export interface CommissionSettlementDetail extends CommissionSettlement {
+  snapshot?: unknown;
+  lines: CommissionSettlementLine[];
+}
+
+export interface CreateSettlementInput {
+  tableId: string;
+  from: string;
+  to: string;
+  caliber?: CommissionCaliber;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

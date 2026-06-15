@@ -13,6 +13,12 @@ import { PurchaseOrdersListPage } from './purchase-orders/PurchaseOrdersListPage
 import { PurchaseOrderFormPage } from './purchase-orders/PurchaseOrderFormPage';
 import { FilesListPage } from './files/FilesListPage';
 import { ReportsPage } from './reports/ReportsPage';
+import { CommissionSummaryPage } from './commission/CommissionSummaryPage';
+import { CommissionOrdersPage } from './commission/CommissionOrdersPage';
+import { CommissionTablesListPage } from './commission/CommissionTablesListPage';
+import { CommissionTableFormPage } from './commission/CommissionTableFormPage';
+import { CommissionSettlementsListPage } from './commission/CommissionSettlementsListPage';
+import { CommissionSettlementDetailPage } from './commission/CommissionSettlementDetailPage';
 import { SettingsPage } from './settings/SettingsPage';
 
 // Placeholder home for the Foundation phase.
@@ -43,6 +49,16 @@ export function App() {
               <Route path="/purchase-orders/:id/edit" element={<PurchaseOrderFormPage />} />
               <Route path="/files" element={<FilesListPage />} />
               <Route path="/reports" element={<ReportsPage />} />
+              <Route path="/commission" element={<CommissionSummaryPage />} />
+              <Route path="/commission/orders" element={<CommissionOrdersPage />} />
+              <Route path="/commission/tables" element={<CommissionTablesListPage />} />
+              <Route path="/commission/tables/new" element={<CommissionTableFormPage />} />
+              <Route path="/commission/tables/:id" element={<CommissionTableFormPage />} />
+              <Route path="/commission/settlements" element={<CommissionSettlementsListPage />} />
+              <Route
+                path="/commission/settlements/:id"
+                element={<CommissionSettlementDetailPage />}
+              />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

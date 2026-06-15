@@ -1,8 +1,17 @@
 import {
   ApiError,
   BaseCurrencyResponse,
+  CommissionOrdersResponse,
+  CommissionQuery,
+  CommissionSettlement,
+  CommissionSettlementDetail,
+  CommissionSummaryResponse,
+  CommissionTable,
+  CommissionTableDetail,
+  CreateCommissionTableInput,
   CreateCustomerInput,
   CreateSalesOrderInput,
+  CreateSettlementInput,
   CreateSupplierInput,
   CreatePurchaseOrderInput,
   Currency,
@@ -12,11 +21,13 @@ import {
   LoginResponse,
   MeResponse,
   Paginated,
+  ReplaceCommissionRulesInput,
   ReportSummaryQuery,
   ReportSummaryResponse,
   SalesOrderResponse,
   SupplierResponse,
   PurchaseOrderResponse,
+  UpdateCommissionTableInput,
   UpdateCustomerInput,
   UpdateSalesOrderInput,
   UpdateSupplierInput,
@@ -351,7 +362,75 @@ export const apiClient = {
   purchaseSummary(query: ReportSummaryQuery): Promise<ReportSummaryResponse> {
     return request<ReportSummaryResponse>(`/api/reports/purchase-summary${reportQs(query)}`);
   },
+
+  // Phase 1F-E commission. Reads are derived in the tenant base currency; rate
+  // tables + settlements are managed/locked server-side.
+  commissionSummary(query: CommissionQuery): Promise<CommissionSummaryResponse> {
+    return request<CommissionSummaryResponse>(`/api/commission/summary${commissionQs(query)}`);
+  },
+  commissionOrders(query: CommissionQuery): Promise<CommissionOrdersResponse> {
+    return request<CommissionOrdersResponse>(`/api/commission/orders${commissionQs(query)}`);
+  },
+  commissionTables(): Promise<CommissionTable[]> {
+    return request<CommissionTable[]>('/api/commission/tables');
+  },
+  commissionTable(id: string): Promise<CommissionTableDetail> {
+    return request<CommissionTableDetail>(`/api/commission/tables/${id}`);
+  },
+  createCommissionTable(input: CreateCommissionTableInput): Promise<CommissionTableDetail> {
+    return request<CommissionTableDetail>('/api/commission/tables', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  updateCommissionTable(
+    id: string,
+    input: UpdateCommissionTableInput,
+  ): Promise<CommissionTableDetail> {
+    return request<CommissionTableDetail>(`/api/commission/tables/${id}`, {
+      method: 'PATCH',
+      body: input,
+    });
+  },
+  replaceCommissionRules(
+    id: string,
+    input: ReplaceCommissionRulesInput,
+  ): Promise<CommissionTableDetail> {
+    return request<CommissionTableDetail>(`/api/commission/tables/${id}/rules`, {
+      method: 'PUT',
+      body: input,
+    });
+  },
+  commissionSettlements(): Promise<CommissionSettlement[]> {
+    return request<CommissionSettlement[]>('/api/commission/settlements');
+  },
+  commissionSettlement(id: string): Promise<CommissionSettlementDetail> {
+    return request<CommissionSettlementDetail>(`/api/commission/settlements/${id}`);
+  },
+  createCommissionSettlement(input: CreateSettlementInput): Promise<CommissionSettlementDetail> {
+    return request<CommissionSettlementDetail>('/api/commission/settlements', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  unlockCommissionSettlement(id: string, reason: string): Promise<CommissionSettlementDetail> {
+    return request<CommissionSettlementDetail>(`/api/commission/settlements/${id}/unlock`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
 };
+
+function commissionQs(query: CommissionQuery): string {
+  const params = new URLSearchParams();
+  params.set('from', query.from);
+  params.set('to', query.to);
+  if (query.caliber) params.set('caliber', query.caliber);
+  if (query.tableId) params.set('tableId', query.tableId);
+  if (query.salespersonId) params.set('salespersonId', query.salespersonId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
 
 function reportQs(query: ReportSummaryQuery): string {
   const params = new URLSearchParams();

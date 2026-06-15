@@ -1,0 +1,168 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { apiClient } from '../lib/api-client';
+import {
+  ApiError,
+  CommissionCaliber,
+  COMMISSION_CALIBER_LABELS,
+  CommissionOrdersResponse,
+} from '../lib/types';
+import {
+  defaultRange,
+  formatAmount,
+  formatRate,
+  RATE_SOURCE_LABELS,
+  STATUS_LABELS,
+} from './format';
+import { controlRow, tag, td, tdNum, th, thNum } from './styles';
+
+export function CommissionOrdersPage() {
+  const initial = useMemo(defaultRange, []);
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [caliber, setCaliber] = useState<CommissionCaliber>('realized');
+
+  const [data, setData] = useState<CommissionOrdersResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setForbidden(false);
+    try {
+      const res = await apiClient.commissionOrders({ from, to, caliber });
+      setData(res);
+    } catch (err) {
+      const s = err instanceof ApiError ? err.status : 0;
+      if (s === 403) {
+        setForbidden(true);
+        setData(null);
+      } else {
+        setError(err instanceof ApiError ? err.message : '加载提成明细失败，请稍后重试');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [from, to, caliber]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <div style={{ fontFamily: 'system-ui', maxWidth: 1080 }}>
+      <h1 style={{ fontSize: 20 }}>提成明细</h1>
+      <p style={{ fontSize: 13 }}>
+        <Link to="/commission">提成汇总</Link> · <Link to="/commission/tables">提成规则</Link> ·{' '}
+        <Link to="/commission/settlements">结算单</Link>
+      </p>
+
+      <div style={controlRow}>
+        <label>
+          起始
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            style={{ display: 'block' }}
+          />
+        </label>
+        <label>
+          结束
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            style={{ display: 'block' }}
+          />
+        </label>
+        <label>
+          口径
+          <select
+            value={caliber}
+            onChange={(e) => setCaliber(e.target.value as CommissionCaliber)}
+            style={{ display: 'block' }}
+          >
+            {(Object.keys(COMMISSION_CALIBER_LABELS) as CommissionCaliber[]).map((c) => (
+              <option key={c} value={c}>
+                {COMMISSION_CALIBER_LABELS[c]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {forbidden && <p style={{ color: 'crimson' }}>没有权限查看提成</p>}
+      {error && <p style={{ color: 'crimson' }}>{error}</p>}
+
+      {!forbidden && data && (
+        <>
+          <p style={{ color: '#666', fontSize: 13 }}>
+            口径：{COMMISSION_CALIBER_LABELS[data.caliber]} · 金额单位：本位币 {data.currency}
+          </p>
+          {loading && <p style={{ color: '#888' }}>加载中…</p>}
+          {data.rows.length === 0 ? (
+            <p style={{ color: '#888' }}>所选范围内没有数据。</p>
+          ) : (
+            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <thead>
+                <tr>
+                  <th style={th}>订单号</th>
+                  <th style={th}>类型</th>
+                  <th style={th}>业务员</th>
+                  <th style={th}>状态</th>
+                  <th style={thNum}>本位币金额</th>
+                  <th style={thNum}>提成率</th>
+                  <th style={thNum}>提成金额</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.rows.map((row) => {
+                  const note = RATE_SOURCE_LABELS[row.rateSource];
+                  return (
+                    <tr key={`${row.orderType}-${row.orderId}`}>
+                      <td style={td}>{row.orderNumber}</td>
+                      <td style={td}>{row.orderType === 'sales' ? '销售' : '采购'}</td>
+                      <td style={td}>{row.salespersonName}</td>
+                      <td style={td}>{STATUS_LABELS[row.status] ?? row.status}</td>
+                      <td style={tdNum}>
+                        {row.amountBase === null ? (
+                          <span style={{ color: '#a60' }}>未计价</span>
+                        ) : (
+                          formatAmount(row.amountBase, data.currency)
+                        )}
+                      </td>
+                      <td style={tdNum}>
+                        {formatRate(row.rateApplied)}
+                        {note && <span style={tag}>{note}</span>}
+                      </td>
+                      <td style={tdNum}>{formatAmount(row.commissionBase, data.currency)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td style={{ ...td, fontWeight: 600 }} colSpan={4}>
+                    合计（{data.totals.orderCount} 笔
+                    {data.totals.unCostedCount > 0 && `，含 ${data.totals.unCostedCount} 笔未计价`}
+                    ）
+                  </td>
+                  <td style={{ ...tdNum, fontWeight: 600 }}>
+                    {formatAmount(data.totals.basisBase, data.currency)}
+                  </td>
+                  <td style={tdNum}>—</td>
+                  <td style={{ ...tdNum, fontWeight: 600 }}>
+                    {formatAmount(data.totals.commissionBase, data.currency)}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
