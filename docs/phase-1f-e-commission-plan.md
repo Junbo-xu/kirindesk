@@ -1,8 +1,18 @@
-# Phase 1F-E — Commission Calculation (Planning)
+# Phase 1F-E — Commission Calculation
 
-> Status: **Planning only.** No migration, no code, no commit until this plan is
-> reviewed and approved. Mirrors the structure of
+> Status: **Implemented.** Backend (migration 033 + commission module) and
+> frontend (commission pages) are complete, merged to `main`, and pass
+> `pnpm verify`. Mirrors the structure of
 > `phase-1f-d-reports-plan.md` and `phase-1f-c-approval-workflow-plan.md`.
+>
+> Delivered:
+> - **DB** — `feat(db): add commission tables migration (Phase 1F-E)` (`16235b7`).
+> - **API** — `feat(api): add commission module (Phase 1F-E)` (`0493a3c`):
+>   service + controller + DTOs, BigInt money math, RLS, dataScope, RBAC
+>   (`commission_tables:view` / `:lock` / `:unlock`).
+> - **Web** — `feat(web): add commission pages (Phase 1F-E)` (`1f07645`):
+>   summary, orders, rate tables (list/edit), settlements (list/detail), with
+>   base-currency display and graceful 403 fallback.
 >
 > Builds directly on completed work:
 > - **1F-A** — orders + line items. Commission can be computed at order-header
