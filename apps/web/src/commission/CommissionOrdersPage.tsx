@@ -56,7 +56,8 @@ export function CommissionOrdersPage() {
       <h1 style={{ fontSize: 20 }}>提成明细</h1>
       <p style={{ fontSize: 13 }}>
         <Link to="/commission">提成汇总</Link> · <Link to="/commission/tables">提成规则</Link> ·{' '}
-        <Link to="/commission/settlements">结算单</Link>
+        <Link to="/commission/settlements">结算单</Link> ·{' '}
+        <Link to="/commission/payouts">发放单</Link>
       </p>
 
       <div style={controlRow}>

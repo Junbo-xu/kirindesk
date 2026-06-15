@@ -55,7 +55,8 @@ export function CommissionSummaryPage() {
       <p style={{ fontSize: 13 }}>
         <Link to="/commission/orders">提成明细</Link> ·{' '}
         <Link to="/commission/tables">提成规则</Link> ·{' '}
-        <Link to="/commission/settlements">结算单</Link>
+        <Link to="/commission/settlements">结算单</Link> ·{' '}
+        <Link to="/commission/payouts">发放单</Link>
       </p>
 
       <div style={controlRow}>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiClient } from '../lib/api-client';
 import { ApiError, CommissionSettlementDetail, COMMISSION_CALIBER_LABELS } from '../lib/types';
 import { formatRate } from './format';
@@ -15,6 +15,7 @@ function grouped(amount: string): string {
 
 export function CommissionSettlementDetailPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const [data, setData] = useState<CommissionSettlementDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +24,11 @@ export function CommissionSettlementDetailPage() {
   const [reason, setReason] = useState('');
   const [unlocking, setUnlocking] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // Generate-or-view payout: create is idempotent server-side (returns the
+  // existing live payout if any), so one button covers both (plan §6.1 / §5.1).
+  const [payoutBusy, setPayoutBusy] = useState(false);
+  const [payoutError, setPayoutError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -71,6 +77,23 @@ export function CommissionSettlementDetailPage() {
       else setActionError(err instanceof ApiError ? err.message : '解锁失败，请稍后重试');
     } finally {
       setUnlocking(false);
+    }
+  }
+
+  async function onGeneratePayout() {
+    if (!id) return;
+    setPayoutError(null);
+    setPayoutBusy(true);
+    try {
+      const payout = await apiClient.createCommissionPayout({ settlementId: id });
+      navigate(`/commission/payouts/${payout.id}`);
+    } catch (err) {
+      const s = err instanceof ApiError ? err.status : 0;
+      if (s === 403) setPayoutError('没有权限生成发放单');
+      else if (s === 409) setPayoutError('该结算单当前未处于锁定状态，无法生成发放单');
+      else setPayoutError(err instanceof ApiError ? err.message : '生成发放单失败，请稍后重试');
+    } finally {
+      setPayoutBusy(false);
     }
   }
 
@@ -133,6 +156,21 @@ export function CommissionSettlementDetailPage() {
           </tr>
         </tfoot>
       </table>
+
+      {isLocked ? (
+        <div style={{ marginTop: 20, maxWidth: 480 }}>
+          <h2 style={{ fontSize: 16 }}>发放单</h2>
+          <p style={{ color: '#666', fontSize: 13 }}>
+            从本结算单生成发放单（金额按结算明细逐笔复制）。若已存在未作废的发放单，将直接打开它。
+          </p>
+          {payoutError && <p style={{ color: 'crimson' }}>{payoutError}</p>}
+          <button type="button" onClick={onGeneratePayout} disabled={payoutBusy}>
+            {payoutBusy ? '处理中…' : '生成 / 查看发放单'}
+          </button>
+        </div>
+      ) : (
+        <p style={{ color: '#a60', marginTop: 16 }}>结算单已解锁，无法生成发放单。</p>
+      )}
 
       {isLocked ? (
         <div style={{ marginTop: 20, maxWidth: 480 }}>

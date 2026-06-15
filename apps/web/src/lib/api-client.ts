@@ -2,6 +2,8 @@ import {
   ApiError,
   BaseCurrencyResponse,
   CommissionOrdersResponse,
+  CommissionPayout,
+  CommissionPayoutDetail,
   CommissionQuery,
   CommissionSettlement,
   CommissionSettlementDetail,
@@ -10,6 +12,7 @@ import {
   CommissionTableDetail,
   CreateCommissionTableInput,
   CreateCustomerInput,
+  CreatePayoutInput,
   CreateSalesOrderInput,
   CreateSettlementInput,
   CreateSupplierInput,
@@ -18,9 +21,11 @@ import {
   CustomerResponse,
   FileResponse,
   FileDownloadToken,
+  ListPayoutsQuery,
   LoginResponse,
   MeResponse,
   Paginated,
+  PayPayoutInput,
   ReplaceCommissionRulesInput,
   ReportSummaryQuery,
   ReportSummaryResponse,
@@ -419,7 +424,46 @@ export const apiClient = {
       body: { reason },
     });
   },
+  // Phase 1F-F payouts. Amounts are server-copied from a locked settlement and
+  // returned as base-currency decimal strings (plan §6.7).
+  commissionPayouts(query: ListPayoutsQuery = {}): Promise<CommissionPayout[]> {
+    return request<CommissionPayout[]>(`/api/commission/payouts${payoutQs(query)}`);
+  },
+  commissionPayout(id: string): Promise<CommissionPayoutDetail> {
+    return request<CommissionPayoutDetail>(`/api/commission/payouts/${id}`);
+  },
+  createCommissionPayout(input: CreatePayoutInput): Promise<CommissionPayoutDetail> {
+    return request<CommissionPayoutDetail>('/api/commission/payouts', {
+      method: 'POST',
+      body: input,
+    });
+  },
+  payCommissionPayoutLine(id: string, lineId: string): Promise<CommissionPayoutDetail> {
+    return request<CommissionPayoutDetail>(`/api/commission/payouts/${id}/lines/${lineId}/pay`, {
+      method: 'POST',
+    });
+  },
+  payCommissionPayout(id: string, input: PayPayoutInput): Promise<CommissionPayoutDetail> {
+    return request<CommissionPayoutDetail>(`/api/commission/payouts/${id}/pay`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  voidCommissionPayout(id: string, reason: string): Promise<CommissionPayoutDetail> {
+    return request<CommissionPayoutDetail>(`/api/commission/payouts/${id}/void`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
 };
+
+function payoutQs(query: ListPayoutsQuery): string {
+  const params = new URLSearchParams();
+  if (query.settlementId) params.set('settlementId', query.settlementId);
+  if (query.status) params.set('status', query.status);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
 
 function commissionQs(query: CommissionQuery): string {
   const params = new URLSearchParams();

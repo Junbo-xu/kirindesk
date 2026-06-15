@@ -436,6 +436,57 @@ export interface CreateSettlementInput {
   caliber?: CommissionCaliber;
 }
 
+// Phase 1F-F commission payout / disbursement. Amounts are base-currency
+// decimal strings copied server-side from a locked settlement; the frontend
+// never computes them. Unlike settlements, payout responses are camelCase and
+// carry an envelope `currency` code (plan §6).
+export type CommissionPayoutStatus = 'open' | 'paid' | 'void';
+export type CommissionPayoutLineStatus = 'pending' | 'paid' | 'void';
+
+export interface CommissionPayout {
+  id: string;
+  settlementId: string;
+  status: CommissionPayoutStatus;
+  totalPayoutBase: string;
+  currency: Currency;
+  payoutDate: string | null;
+  externalRef: string | null;
+  createdAt: string;
+}
+
+export interface CommissionPayoutLine {
+  id: string;
+  salespersonUserId: string;
+  salespersonName: string | null;
+  settlementLineId: string;
+  amountBase: string;
+  status: CommissionPayoutLineStatus;
+  paidAt: string | null;
+}
+
+export interface CommissionPayoutDetail extends CommissionPayout {
+  note: string | null;
+  paidAt: string | null;
+  voidedAt: string | null;
+  lines: CommissionPayoutLine[];
+}
+
+export interface CreatePayoutInput {
+  settlementId: string;
+  note?: string;
+}
+
+export interface PayPayoutInput {
+  payoutDate: string;
+  externalRef?: string;
+  note?: string;
+}
+
+export interface ListPayoutsQuery {
+  settlementId?: string;
+  status?: CommissionPayoutStatus;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

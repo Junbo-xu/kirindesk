@@ -45,3 +45,23 @@ export const STATUS_LABELS: Record<string, string> = {
   completed: '已完成',
   cancelled: '已取消',
 };
+
+// Payout lifecycle (plan §6.2). Batch: open/paid/void; line: pending/paid/void.
+export const PAYOUT_STATUS_LABELS: Record<string, string> = {
+  open: '待发放',
+  paid: '已发放',
+  void: '已作废',
+};
+export const PAYOUT_LINE_STATUS_LABELS: Record<string, string> = {
+  pending: '待发放',
+  paid: '已发放',
+  void: '已作废',
+};
+
+// Colour-codes a payout/line status: green when disbursed, muted-amber when
+// pending/open, red when voided.
+export function payoutStatusColor(status: string): string {
+  if (status === 'paid') return '#1a7';
+  if (status === 'void') return 'crimson';
+  return '#a60';
+}

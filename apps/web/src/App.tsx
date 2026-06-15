@@ -19,6 +19,8 @@ import { CommissionTablesListPage } from './commission/CommissionTablesListPage'
 import { CommissionTableFormPage } from './commission/CommissionTableFormPage';
 import { CommissionSettlementsListPage } from './commission/CommissionSettlementsListPage';
 import { CommissionSettlementDetailPage } from './commission/CommissionSettlementDetailPage';
+import { CommissionPayoutsListPage } from './commission/CommissionPayoutsListPage';
+import { CommissionPayoutDetailPage } from './commission/CommissionPayoutDetailPage';
 import { SettingsPage } from './settings/SettingsPage';
 
 // Placeholder home for the Foundation phase.
@@ -59,6 +61,8 @@ export function App() {
                 path="/commission/settlements/:id"
                 element={<CommissionSettlementDetailPage />}
               />
+              <Route path="/commission/payouts" element={<CommissionPayoutsListPage />} />
+              <Route path="/commission/payouts/:id" element={<CommissionPayoutDetailPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

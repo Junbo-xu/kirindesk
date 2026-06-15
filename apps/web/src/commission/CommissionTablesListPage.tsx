@@ -45,7 +45,8 @@ export function CommissionTablesListPage() {
       <h1 style={{ fontSize: 20 }}>提成规则</h1>
       <p style={{ fontSize: 13 }}>
         <Link to="/commission">提成汇总</Link> · <Link to="/commission/orders">提成明细</Link> ·{' '}
-        <Link to="/commission/settlements">结算单</Link>
+        <Link to="/commission/settlements">结算单</Link> ·{' '}
+        <Link to="/commission/payouts">发放单</Link>
       </p>
 
       {/* The "新建/编辑" controls are always offered; the server is the gate —

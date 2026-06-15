@@ -53,7 +53,8 @@ export function CommissionSettlementsListPage() {
       <h1 style={{ fontSize: 20 }}>结算单</h1>
       <p style={{ fontSize: 13 }}>
         <Link to="/commission">提成汇总</Link> · <Link to="/commission/orders">提成明细</Link> ·{' '}
-        <Link to="/commission/tables">提成规则</Link>
+        <Link to="/commission/tables">提成规则</Link> ·{' '}
+        <Link to="/commission/payouts">发放单</Link>
       </p>
 
       {forbidden && <p style={{ color: 'crimson' }}>没有权限查看结算单</p>}
