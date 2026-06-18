@@ -1,11 +1,14 @@
 import { Module, Global } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
+import { RbacModule } from '../rbac/rbac.module';
+import { AuthModule } from '../auth/auth.module';
 import { OCR_PROVIDER } from './ocr-provider.interface';
 import { AI_PROVIDER } from './ai-provider.interface';
 import { MockOcrProvider } from './mock-ocr-provider';
 import { MockAiProvider } from './mock-ai-provider';
 import { resolveAiOcrProviderName } from './ai.config';
 import { AiService } from './ai.service';
+import { AiController } from './ai.controller';
 
 /**
  * Wires the active OCR and AI providers behind their DI tokens (plan §3.6).
@@ -17,7 +20,8 @@ import { AiService } from './ai.service';
  */
 @Global()
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, RbacModule, AuthModule],
+  controllers: [AiController],
   providers: [
     {
       provide: OCR_PROVIDER,
