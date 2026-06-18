@@ -1,4 +1,8 @@
-import { InternalServerErrorException, RequestTimeoutException } from '@nestjs/common';
+import {
+  InternalServerErrorException,
+  NotFoundException,
+  RequestTimeoutException,
+} from '@nestjs/common';
 
 /**
  * Raised when an OCR/AI provider backend fails. Like StorageException, it
@@ -33,5 +37,17 @@ export class OcrTimeoutException extends RequestTimeoutException {
 export class AiTimeoutException extends RequestTimeoutException {
   constructor(timeoutMs: number) {
     super(`AI operation timed out after ${timeoutMs}ms`);
+  }
+}
+
+/**
+ * Raised when the file targeted by an OCR call is not visible to the caller —
+ * wrong tenant, out of dataScope, deleted, or non-existent. Deliberately opaque
+ * (a single 404 for all of these) so existence is never revealed across scope
+ * boundaries (plan §6.4, §7.2).
+ */
+export class FileNotInScopeException extends NotFoundException {
+  constructor() {
+    super('File not found');
   }
 }
