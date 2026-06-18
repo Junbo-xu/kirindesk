@@ -30,6 +30,7 @@ const PROCUREMENT_MODULE_ID = 'a0000000-0000-0000-0000-000000000003';
 const FINANCE_MODULE_ID = 'a0000000-0000-0000-0000-000000000004';
 const FILES_MODULE_ID = 'a0000000-0000-0000-0000-000000000005';
 const SYSTEM_MODULE_ID = 'a0000000-0000-0000-0000-000000000007';
+const AI_MODULE_ID = 'a0000000-0000-0000-0000-000000000008';
 const ADMIN_ROLE_ID = 'a1111111-1111-1111-1111-111111111111'; // tenant1, scope=all
 const SALES_ROLE_ID = 'a2222222-2222-2222-2222-222222222222'; // tenant1, scope=own
 const T2_ADMIN_ROLE_ID = 'a3333333-3333-3333-3333-333333333333'; // tenant2, scope=all
@@ -93,6 +94,10 @@ export const COMMISSION_PAYOUT_PERMS = [
   'commission_payouts:reverse',
 ] as const;
 
+// Phase 1G AI/OCR (ai module). process is separate from view so triggering a
+// provider call is independently grantable from reading invocation records.
+export const AI_PERMS = ['ocr:view', 'ocr:process', 'ai:view', 'ai:process'] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -103,6 +108,7 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...TENANT_SETTINGS_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
   ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
 ];
 
 interface RoleSpec {
@@ -201,7 +207,8 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
          ($3, 'procurement', '采购管理', 3),
          ($4, 'files', '文件管理', 5),
          ($5, 'system', '系统管理', 7),
-         ($6, 'finance', '财务管理', 4)
+         ($6, 'finance', '财务管理', 4),
+         ($7, 'ai', 'AI/OCR', 8)
        ON CONFLICT (code) DO NOTHING`,
       [
         CRM_MODULE_ID,
@@ -210,6 +217,7 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
         FILES_MODULE_ID,
         SYSTEM_MODULE_ID,
         FINANCE_MODULE_ID,
+        AI_MODULE_ID,
       ],
     );
 
