@@ -22,8 +22,15 @@ import {
   FileResponse,
   FileDownloadToken,
   ListPayoutsQuery,
+  ListInvocationsQuery,
   LoginResponse,
   MeResponse,
+  OcrExtractRequestBody,
+  OcrExtractResponse,
+  AiCompleteRequestBody,
+  AiCompleteResponse,
+  InvocationSummary,
+  InvocationListResult,
   Paginated,
   PayPayoutInput,
   ReplaceCommissionRulesInput,
@@ -455,6 +462,28 @@ export const apiClient = {
       body: { reason },
     });
   },
+
+  // Phase 1G AI/OCR. Mock-only providers (no real vendor). ocrExtract/aiComplete
+  // return the live result; list/get return summaries only (full text/output is
+  // never persisted). No update/delete — invocation records are append-only.
+  ocrExtract(body: OcrExtractRequestBody): Promise<OcrExtractResponse> {
+    return request<OcrExtractResponse>('/api/ai/ocr', { method: 'POST', body });
+  },
+  listOcr(query: ListInvocationsQuery = {}): Promise<InvocationListResult> {
+    return request<InvocationListResult>(`/api/ai/ocr${invocationQs(query)}`);
+  },
+  getOcr(id: string): Promise<InvocationSummary> {
+    return request<InvocationSummary>(`/api/ai/ocr/${id}`);
+  },
+  aiComplete(body: AiCompleteRequestBody): Promise<AiCompleteResponse> {
+    return request<AiCompleteResponse>('/api/ai/complete', { method: 'POST', body });
+  },
+  listAiCompletions(query: ListInvocationsQuery = {}): Promise<InvocationListResult> {
+    return request<InvocationListResult>(`/api/ai/complete${invocationQs(query)}`);
+  },
+  getAiCompletion(id: string): Promise<InvocationSummary> {
+    return request<InvocationSummary>(`/api/ai/complete/${id}`);
+  },
 };
 
 function payoutQs(query: ListPayoutsQuery): string {
@@ -483,6 +512,16 @@ function reportQs(query: ReportSummaryQuery): string {
   if (query.groupBy) params.set('groupBy', query.groupBy);
   if (query.granularity) params.set('granularity', query.granularity);
   if (query.caliber) params.set('caliber', query.caliber);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+function invocationQs(query: ListInvocationsQuery): string {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+  if (query.status) params.set('status', query.status);
+  if (query.fileId) params.set('fileId', query.fileId);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
 }

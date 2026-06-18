@@ -487,6 +487,68 @@ export interface ListPayoutsQuery {
   status?: CommissionPayoutStatus;
 }
 
+// ---- Phase 1G AI/OCR ----
+// Read endpoints return only this summary (never the raw provider_invocations
+// row); the full OCR text / AI output is returned live at process time and is
+// never persisted, so it is absent from the summary.
+export interface InvocationSummary {
+  id: string;
+  providerType: string; // 'ocr' | 'ai'
+  providerName: string; // mock-only: always 'mock'
+  action: string; // 'ocr.extract' | 'ai.complete'
+  status: string; // 'success' | 'error'
+  durationMs: number | null;
+  tokensUsed: number | null;
+  sourceFileId: string | null;
+  createdAt: string;
+}
+
+export interface OcrField {
+  key: string;
+  value: string;
+  confidence: number;
+}
+
+// POST /api/ai/ocr — live result; text/fields are NOT persisted.
+export interface OcrExtractResponse {
+  invocation: InvocationSummary;
+  text: string;
+  fields: OcrField[];
+  confidence: number;
+}
+
+// POST /api/ai/complete — live result; output is NOT persisted.
+export interface AiCompleteResponse {
+  invocation: InvocationSummary;
+  output: string;
+}
+
+export interface InvocationListResult {
+  data: InvocationSummary[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface ListInvocationsQuery {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  fileId?: string;
+}
+
+export interface OcrExtractRequestBody {
+  fileId: string;
+  docType?: string;
+  options?: { timeoutMs?: number; languages?: string[] };
+}
+
+export interface AiCompleteRequestBody {
+  task: string;
+  input: string;
+  options?: { timeoutMs?: number; maxOutputTokens?: number };
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;
