@@ -41,5 +41,9 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'roles:update', '编辑角色', 'update'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'tenant_settings:view', '查看设置', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'tenant_settings:update', '修改设置', 'update'),
-  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'audit_logs:view', '查看审计日志', 'view')
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'audit_logs:view', '查看审计日志', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ocr:view', '查看 OCR 结果', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ocr:process', '发起 OCR 识别', 'process'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ai:view', '查看 AI 结果', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ai:process', '发起 AI 调用', 'process')
 ON CONFLICT (code) DO NOTHING;
