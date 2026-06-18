@@ -15,6 +15,7 @@ import { FilesModule } from './files/files.module';
 import { TenantSettingsModule } from './tenant-settings/tenant-settings.module';
 import { ReportsModule } from './reports/reports.module';
 import { CommissionModule } from './commission/commission.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { CommissionModule } from './commission/commission.module';
     TenantSettingsModule,
     ReportsModule,
     CommissionModule,
+    AiModule,
   ],
 })
 export class AppModule {}
