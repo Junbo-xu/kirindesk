@@ -23,6 +23,8 @@ export function AppLayout() {
           <Link to="/files">文件</Link>
           <Link to="/reports">报表</Link>
           <Link to="/commission">提成</Link>
+          <Link to="/ai/ocr">OCR</Link>
+          <Link to="/ai/complete">AI 补全</Link>
           <Link to="/settings">设置</Link>
           <span style={{ color: '#555' }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>
