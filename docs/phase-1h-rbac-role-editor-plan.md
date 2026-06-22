@@ -261,8 +261,210 @@ append-only 哈希链(`audit_logs`,REVOKE UPDATE/DELETE)。
 末位 owner 停用被拒、自锁被拒、system 角色改权限被拒、跨租户 404、重复 email/name
 409、以及每条写操作的审计双写 + 审计链 `verifyChain` PASS。
 
-## 5. 前端页面与导航(待补充)
+## 5. 前端页面与导航
 
-## 6. 风险与回滚(待补充)
+沿用既有 `apps/web/src/<module>/` + `App.tsx` 路由 + `AppLayout` 扁平导航 +
+`request<T>()`/`apiClient` + `ApiError` 按 status 映射 + 行内 `CSSProperties`
+中文 + 403 优雅降级的约定(同 commission/files/reports 页)。纯前端,无新依赖。
 
-## 7. 验证命令与验收标准(待补充)
+### 5.1 页面
+
+**用户管理**(`apps/web/src/users/`):
+
+- `UsersListPage.tsx`(路由 `/users`):用户列表(name / email / status /
+  角色名 / 创建时间),分页 + q 搜索 + status 过滤;行操作:编辑、停用/启用;
+  顶部「新建用户」。无 `users:view` → 403 优雅降级(整页提示「没有权限」)。
+- `UserFormPage.tsx`(路由 `/users/new` 与 `/users/:id/edit`):创建填
+  email + name + 初始密码(+ 可选 phone),编辑改 name/phone/status(email、
+  密码不可改);底部「角色分配」多选(复选框列出本租户角色),提交时调
+  `PUT /api/users/:id/roles` 全量替换。错误映射:409 重复 email、403 无权限/
+  护栏命中(末位 owner、自锁、越权授权)、404。
+
+**角色管理**(`apps/web/src/roles/`):
+
+- `RolesListPage.tsx`(路由 `/roles`):角色列表(name / description /
+  is_system 标记 / 权限数 / 引用用户数);system 角色行禁用编辑/删除按钮(仅 UI
+  提示,服务端才是真相源);顶部「新建角色」。无 `roles:view` → 403 降级。
+- `RoleFormPage.tsx`(路由 `/roles/new` 与 `/roles/:id/edit`):name +
+  description;核心是**权限矩阵**:调 `GET /api/permissions` 取按 module 分组的
+  权限字典,渲染「模块分组 × 权限码」复选 + 每条选中项的 data_scope 下拉
+  (all / own);提交时 `PUT /api/roles/:id/permissions` 全量替换。is_system
+  角色进入只读视图(不可勾选、不可保存)。错误映射:409 重复 name / 仍被引用、
+  403 system 只读 / 越权授权(授了自己没有的码或超范围)、404。
+
+### 5.2 api-client / 类型扩展
+
+`lib/api-client.ts` 新增方法(走既有 `request<T>()`,查询串用 `URLSearchParams`
+helper 同 `listFiles`):
+`listUsers / getUser / createUser / updateUser / setUserRoles / deactivateUser`、
+`listRoles / getRole / createRole / updateRole / deleteRole / setRolePermissions`、
+`listPermissionCatalog`。
+`lib/types.ts` 新增:`UserSummary / UserDetail(含 roles[])`、`RoleSummary /
+RoleDetail(含 permissions[]: {permissionId, dataScope})`、`PermissionCatalog`
+(module 分组)、各请求体类型。字段严格对齐后端 mapper 输出(**绝不含**
+password_hash)。
+
+### 5.3 导航
+
+`AppLayout.tsx` 在「设置」附近(系统管理一类)新增两个链接:
+
+```tsx
+<Link to="/users">用户</Link>
+<Link to="/roles">角色</Link>
+```
+
+照既有约定:链接始终可见,访问控制在后端;无权限用户进页面后首个 list 请求
+返回 403,页面渲染「没有权限」提示而非崩溃(`/api/auth/me` 不带权限码,UI 不做
+权限隐藏 —— 与 Phase 1G 同一处理)。
+
+### 5.4 不做
+
+- 不做权限码的中文 label 本地化字典之外的花哨分组 UI;矩阵用 module name +
+  permission name(后端字典已带中文 name)朴素渲染即可。
+- 不做拖拽 / 批量授权 / 角色克隆。
+- 不做密码重置 UI、不做 owner 移交 UI(对应后端 §3.6 未做的端点)。
+- 不做组件库引入,保持现有行内样式风格。
+
+## 6. 风险与回滚
+
+### 6.1 风险
+
+本阶段是「RBAC 自管理」入口,本质是提权面,风险集中在授权正确性而非数据结构
+(零 migration)。逐项缓解:
+
+- **越权扩散(最高风险)**:管理员借角色编辑器授出自己没有的权限 / 更宽的
+  data_scope,实现横向或纵向提权。缓解:§4.1 subset guard 服务端逐条强制
+  (`allowed && requestedScope ⊆ callerScope`),集成测试专项覆盖;失败整体回滚
+  不落库。
+- **把租户锁死**:停用/降权最后一个 owner,或管理员自锁,导致无人能再管理租户。
+  缓解:§4.1 末位 owner 护栏(活跃 owner 数不得归零)+ 不可自锁,事务内 COUNT
+  校验,409 拒绝。
+- **system 角色被破坏**:误改/误删内置角色使既有用户集体失权。缓解:
+  `is_system=true` 服务端只读(改权限/改名/删除全拒),前端按钮也禁用(双层)。
+- **悬空授权**:删角色后 user_roles 仍引用。缓解:删除前置校验(仍被引用 →
+  409,要求先解绑)。
+- **响应泄漏敏感列**:user 响应误带 `password_hash`。缓解:mapper 显式白名单
+  字段塑形(同既有模块),集成测试断言响应无 password_hash;DTO whitelist +
+  forbidNonWhitelisted 也拒绝 `is_tenant_owner` 等入参提权。
+- **跨租户**:任何 id 命中别租户行。缓解:FORCE RLS(migration 021 已在)+
+  `withTenantContext`,不透明 404,集成测试跨租户用例兜底。
+- **全量替换的并发竞态**:两个管理员同时替换同一角色权限集可能互相覆盖。缓解:
+  替换在单事务内对目标 role / user 行 `SELECT … FOR UPDATE` 串行化(同既有
+  commission 锁定写法);本阶段不引入乐观锁版本号。
+- **审计链**:写授权却漏审计,破坏 §6 合规承诺。缓解:每个写操作提交后
+  `AuditService.log`,集成测试断言审计双写 + `verifyChain` PASS。
+
+### 6.2 回滚
+
+- **零数据库变更**:无 migration、无 seed 改动(权限码已存在),所以回滚不涉及
+  任何反向 migration 或数据迁移。
+- 后端回滚 = `git revert` 对应 feat commit(新增 users/roles 控制器 + 服务 +
+  DTO + module 注册),既有认证用的 `users.service` 既有方法签名不变(只新增方法),
+  删除新增内容即恢复原状。
+- 前端回滚 = `git revert` 对应 web commit(新增两组页面 + api-client/types/
+  App.tsx/AppLayout 四处修改),纯增量,不改既有页面行为。
+- 各步按既有纪律拆分 feat commit(后端、前端分开;docs 单独),可逐 commit
+  独立回滚。
+
+### 6.3 兼容性
+
+- 不改 `PermissionGuard` / `withTenantContext` / 审计链结构 / 既有权限码 →
+  既有 11 个模块的行为与现有 256 集成 + 13 安全测试不受影响,应保持全绿。
+- 新端点是新增路由,不与既有路由冲突;新导航链接不改既有链接。
+- 唯一的「行为变化」是:原本只能改库才能做的用户/角色管理,现在有了 API/UI —— 
+  但所有变更都经 RBAC + 护栏 + 审计,不绕过任何既有安全控制。
+
+## 7. 验证命令与验收标准
+
+### 7.1 验证命令
+
+实施每步后、提交前必须全绿:
+
+```bash
+# 全量质量门(lint → format:check → typecheck → build → unit → integration → security)
+pnpm verify
+```
+
+快速本地子集:
+
+```bash
+pnpm --filter @kirindesk/api test:integration   # 后端集成(含本阶段新用例)
+pnpm --filter @kirindesk/web typecheck && pnpm --filter @kirindesk/web build
+pnpm test:security                              # 13 项安全回归
+```
+
+审计链单独核验(本阶段写授权,链必须保持完整):
+
+```bash
+pnpm --filter @kirindesk/database verify-chain "tenant:<dev-tenant-id>"
+```
+
+格式问题按 auto-memory 约定静默 `pnpm format` 修复后再跑,不单独汇报。
+
+### 7.2 集成测试(后端,新增 users/roles 套件)
+
+权限 / 认证门:
+
+1. 无 token → 401;平台 token → 401(租户域端点);无 `users:view` 用户访问
+   `GET /api/users` → 403;无 `roles:view` 访问 `GET /api/roles` → 403。
+
+用户 CRUD:
+
+2. `users:create` 用户创建成功;重复 email → 409;创建响应**不含**
+   `password_hash`;DTO 拒绝 `is_tenant_owner` 越权入参(forbidNonWhitelisted)。
+3. 更新 name/phone/status 成功;`GET /api/users/:id` 返回用户 + 角色集。
+
+角色 CRUD + 权限矩阵:
+
+4. 创建自定义角色成功;重复 name → 409;`is_system` 恒 false。
+5. `PUT /api/roles/:id/permissions` 全量替换成功并可重读;`GET /api/permissions`
+   返回按 module 分组的字典。
+
+护栏(§4,逐条):
+
+6. **subset guard**:scope=own 的管理员尝试授出 all → 403;授予自己**未持有**
+   的权限码 → 403;整体不落库(重读权限集未变)。
+7. **末位 owner**:停用/软删最后一个活跃 owner → 409。
+8. **自锁**:停用/删除自己当前账户 → 409/400。
+9. **system 角色只读**:改其权限 / 改名 / 删除 → 403。
+10. **悬空授权**:删仍被 user_roles 引用的角色 → 409。
+11. **跨租户**:tenant2 用户访问 tenant1 user/role :id → 不透明 404。
+
+审计:
+
+12. 每个写操作(user.created/updated/deactivated/roles_replaced、
+    role.created/updated/deleted/permissions_replaced)各写一条 `audit_logs`,
+    `before/after` 反映授权差异,响应/审计均无 password。
+13. 全套操作后 `verifyChain(tenant:…)` → PASS。
+
+### 7.3 浏览器 QA(手动,实施后执行)
+
+前置:`docker compose up` + `pnpm db:migrate`,起 api + web,用持有
+`users:*`/`roles:*` 的租户管理员登录(dev seed 的 admin@dev.local)。
+
+1. 用户列表加载 / 分页 / 搜索 / status 过滤。
+2. 新建用户(设初始密码)→ 出现在列表;用该账户能登录。
+3. 编辑用户、分配角色 → 重新登录后该用户的权限随角色生效(挑一个受控页面验证
+   可见/不可见)。
+4. 角色列表;新建自定义角色;在权限矩阵勾选若干权限码 + 设 data_scope → 保存
+   → 重读一致。
+5. system 角色行的编辑/删除按钮禁用;强行调用(改 URL)仍被后端 403。
+6. 护栏可见反馈:停用末位 owner → 看到 409 文案;授越权权限 → 403 文案。
+7. 无权限用户(无 `users:view`/`roles:view`)进 `/users`、`/roles` → 「没有
+   权限」优雅降级,不崩溃。
+
+### 7.4 验收标准
+
+- `pnpm verify` 全绿(既有 256 集成 + 13 安全**不回归**,新增 users/roles 用例
+  全过)。
+- §7.2 所有护栏用例按预期返回(尤其 subset guard、末位 owner、system 只读、
+  跨租户 404)。
+- §7.3 浏览器 QA 全部通过。
+- `git diff --stat` 仅触及预期文件:后端 `apps/api/src/users/`、新
+  `apps/api/src/roles/`、`app.module.ts` 注册;前端 `apps/web/src/users/`、
+  `apps/web/src/roles/`、`lib/api-client.ts`、`lib/types.ts`、`App.tsx`、
+  `AppLayout.tsx`;**无 migration、无 seed、无新依赖**。
+- 响应体经断言确认无 `password_hash` 等敏感列。
+- 代码 commit(后端 / 前端分开)与 docs commit 分离;显式 `git add` 列文件,
+  不含 `.env`/`dist`/`node_modules`/日志。
+- 完成后更新 CLAUDE.md 阶段汇总,标记 Phase 1H 完成。
