@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
@@ -24,3 +24,6 @@ import { requireEnv } from '../common/env';
   exports: [TenantAuthGuard],
 })
 export class AuthModule {}
+// Note: UsersModule ↔ AuthModule form a cycle (auth needs UsersService; the
+// users controller needs TenantAuthGuard). UsersModule uses forwardRef(()=>
+// AuthModule); this side imports UsersModule directly, which Nest resolves.
