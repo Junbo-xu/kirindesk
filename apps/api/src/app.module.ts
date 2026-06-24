@@ -4,6 +4,7 @@ import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { PlatformAuthModule } from './platform-auth/platform-auth.module';
 import { UsersModule } from './users/users.module';
+import { RolesModule } from './roles/roles.module';
 import { RbacModule } from './rbac/rbac.module';
 import { AuditModule } from './audit/audit.module';
 import { CustomersModule } from './customers/customers.module';
@@ -24,6 +25,7 @@ import { AiModule } from './ai/ai.module';
     AuthModule,
     PlatformAuthModule,
     UsersModule,
+    RolesModule,
     RbacModule,
     AuditModule,
     CustomersModule,
