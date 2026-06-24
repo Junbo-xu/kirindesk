@@ -44,6 +44,17 @@ import {
   UpdateSalesOrderInput,
   UpdateSupplierInput,
   UpdatePurchaseOrderInput,
+  UserSummary,
+  UserDetail,
+  CreateUserInput,
+  UpdateUserInput,
+  ListUsersQuery,
+  RoleSummary,
+  RoleDetail,
+  CreateRoleInput,
+  UpdateRoleInput,
+  PermissionGrantInput,
+  CatalogModule,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -483,6 +494,60 @@ export const apiClient = {
   },
   getAiCompletion(id: string): Promise<InvocationSummary> {
     return request<InvocationSummary>(`/api/ai/complete/${id}`);
+  },
+
+  // Phase 1H tenant user management. Reads are tenant-isolated + dataScope
+  // narrowed; the server enforces last-owner / self-lock / no-escalation guards.
+  listUsers(query: ListUsersQuery = {}): Promise<Paginated<UserSummary>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    return request<Paginated<UserSummary>>(`/api/users${qs ? `?${qs}` : ''}`);
+  },
+  getUser(id: string): Promise<UserDetail> {
+    return request<UserDetail>(`/api/users/${id}`);
+  },
+  createUser(input: CreateUserInput): Promise<UserDetail> {
+    return request<UserDetail>('/api/users', { method: 'POST', body: input });
+  },
+  updateUser(id: string, input: UpdateUserInput): Promise<UserDetail> {
+    return request<UserDetail>(`/api/users/${id}`, { method: 'PATCH', body: input });
+  },
+  setUserRoles(id: string, roleIds: string[]): Promise<UserDetail> {
+    return request<UserDetail>(`/api/users/${id}/roles`, { method: 'PUT', body: { roleIds } });
+  },
+  deactivateUser(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/users/${id}`, { method: 'DELETE' });
+  },
+
+  // Phase 1H tenant role management + permission catalog. System roles are
+  // read-only server-side; grants are subset-checked against the caller's own.
+  listRoles(): Promise<RoleSummary[]> {
+    return request<RoleSummary[]>('/api/roles');
+  },
+  getRole(id: string): Promise<RoleDetail> {
+    return request<RoleDetail>(`/api/roles/${id}`);
+  },
+  createRole(input: CreateRoleInput): Promise<RoleDetail> {
+    return request<RoleDetail>('/api/roles', { method: 'POST', body: input });
+  },
+  updateRole(id: string, input: UpdateRoleInput): Promise<RoleDetail> {
+    return request<RoleDetail>(`/api/roles/${id}`, { method: 'PATCH', body: input });
+  },
+  deleteRole(id: string): Promise<{ id: string; deleted: true }> {
+    return request<{ id: string; deleted: true }>(`/api/roles/${id}`, { method: 'DELETE' });
+  },
+  setRolePermissions(id: string, permissions: PermissionGrantInput[]): Promise<RoleDetail> {
+    return request<RoleDetail>(`/api/roles/${id}/permissions`, {
+      method: 'PUT',
+      body: { permissions },
+    });
+  },
+  listPermissionCatalog(): Promise<CatalogModule[]> {
+    return request<CatalogModule[]>('/api/permissions');
   },
 };
 

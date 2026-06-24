@@ -549,6 +549,115 @@ export interface AiCompleteRequestBody {
   options?: { timeoutMs?: number; maxOutputTokens?: number };
 }
 
+// ---- Phase 1H: tenant user & role management ----------------------------
+export type UserStatus = 'active' | 'inactive';
+
+// data_scope vocabulary shared with the backend. The web permission matrix
+// offers all / own; assigned is preserved if it already exists on a grant.
+export type DataScope = 'all' | 'assigned' | 'own';
+
+export const DATA_SCOPE_LABELS: Record<DataScope, string> = {
+  all: '全部',
+  assigned: '指派',
+  own: '本人',
+};
+
+export interface UserRoleBrief {
+  id: string;
+  name: string;
+}
+
+export interface UserSummary {
+  id: string;
+  email: string;
+  name: string;
+  phone: string | null;
+  status: UserStatus;
+  isTenantOwner: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
+export interface UserDetail extends UserSummary {
+  roles: UserRoleBrief[];
+}
+
+export interface CreateUserInput {
+  email: string;
+  name: string;
+  password: string;
+  phone?: string;
+  roleIds?: string[];
+}
+
+export interface UpdateUserInput {
+  name?: string;
+  phone?: string;
+  status?: UserStatus;
+}
+
+export interface ListUsersQuery {
+  page?: number;
+  pageSize?: number;
+  q?: string;
+  status?: UserStatus;
+}
+
+// A role's permission grant (returned by getRole). Carries the resolved code /
+// name for display plus the persisted data_scope.
+export interface PermissionGrant {
+  permissionId: string;
+  code: string;
+  name: string;
+  action: string;
+  dataScope: string;
+}
+
+export interface RoleSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  isSystem: boolean;
+  permissionCount: number;
+  userCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoleDetail extends RoleSummary {
+  permissions: PermissionGrant[];
+}
+
+export interface CreateRoleInput {
+  name: string;
+  description?: string;
+}
+
+export interface UpdateRoleInput {
+  name?: string;
+  description?: string;
+}
+
+// A single grant sent to PUT /api/roles/:id/permissions.
+export interface PermissionGrantInput {
+  permissionId: string;
+  dataScope: DataScope;
+}
+
+// Read-only permission catalog (GET /api/permissions), grouped by module.
+export interface CatalogPermission {
+  id: string;
+  code: string;
+  name: string;
+  action: string;
+}
+
+export interface CatalogModule {
+  code: string;
+  name: string;
+  permissions: CatalogPermission[];
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;
