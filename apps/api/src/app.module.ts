@@ -17,6 +17,7 @@ import { TenantSettingsModule } from './tenant-settings/tenant-settings.module';
 import { ReportsModule } from './reports/reports.module';
 import { CommissionModule } from './commission/commission.module';
 import { AiModule } from './ai/ai.module';
+import { AuditViewerModule } from './audit/audit-viewer.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { AiModule } from './ai/ai.module';
     ReportsModule,
     CommissionModule,
     AiModule,
+    AuditViewerModule,
   ],
 })
 export class AppModule {}
