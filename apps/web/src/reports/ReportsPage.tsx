@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../lib/api-client';
+import { saveBlob } from '../lib/download';
 import {
   ApiError,
   REPORT_CALIBER_LABELS,
@@ -60,6 +61,9 @@ export function ReportsPage() {
   // replaced by a read-only notice, matching the app's graceful-403 handling.
   const [forbidden, setForbidden] = useState(false);
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   // If the side changes to one whose entity grouping differs, reset an
   // incompatible groupBy back to status so we never send customer to purchase.
   useEffect(() => {
@@ -99,6 +103,25 @@ export function ReportsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Exports the CSV for the current controls (same query the table reflects).
+  const onExport = useCallback(async () => {
+    setExporting(true);
+    setExportError(null);
+    const query = { from, to, groupBy, granularity, caliber };
+    try {
+      const { blob, filename } =
+        side === 'sales'
+          ? await apiClient.exportSalesSummary(query)
+          : await apiClient.exportPurchaseSummary(query);
+      saveBlob(blob, filename);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) setExportError('没有权限导出报表');
+      else setExportError(err instanceof ApiError ? err.message : '导出失败，请稍后重试');
+    } finally {
+      setExporting(false);
+    }
+  }, [side, from, to, groupBy, granularity, caliber]);
 
   const th: React.CSSProperties = {
     textAlign: 'left',
@@ -204,10 +227,14 @@ export function ReportsPage() {
             ))}
           </select>
         </label>
+        <button type="button" onClick={() => void onExport()} disabled={exporting || forbidden}>
+          {exporting ? '导出中…' : '导出 CSV'}
+        </button>
       </div>
 
       {forbidden && <p style={{ color: 'crimson' }}>没有权限查看报表</p>}
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
+      {exportError && <p style={{ color: 'crimson' }}>{exportError}</p>}
 
       {!forbidden && data && (
         <>

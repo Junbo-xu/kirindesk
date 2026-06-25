@@ -139,6 +139,47 @@ async function toApiError(res: Response): Promise<ApiError> {
   return new ApiError(res.status, message, fields);
 }
 
+// Pulls the filename from a Content-Disposition header: prefer the RFC 5987
+// filename* (UTF-8, percent-decoded), fall back to a plain filename=.
+function parseContentDispositionFilename(cd: string | null): string | null {
+  if (!cd) return null;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      // malformed encoding; fall through to the plain filename
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(cd);
+  return plain ? plain[1] : null;
+}
+
+// Low-level binary download (plan §6.2/§6.3): same base URL + Authorization
+// header + ApiError mapping as request<T>(), but returns the raw blob plus the
+// server-provided filename instead of parsing JSON. Used for CSV exports.
+async function downloadBlob(path: string): Promise<{ blob: Blob; filename: string }> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(path, { method: 'GET', headers });
+
+  if (res.status === 401) {
+    clearToken();
+    if (onUnauthorized) onUnauthorized();
+    throw new ApiError(401, '登录已过期，请重新登录');
+  }
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+
+  const blob = await res.blob();
+  const filename =
+    parseContentDispositionFilename(res.headers.get('content-disposition')) ?? 'export.csv';
+  return { blob, filename };
+}
+
 export const apiClient = {
   login(email: string, password: string, tenantSlug: string): Promise<LoginResponse> {
     return request<LoginResponse>('/api/auth/login', {
@@ -565,6 +606,20 @@ export const apiClient = {
   },
   verifyAuditChain(): Promise<AuditChainVerifyResult> {
     return request<AuditChainVerifyResult>('/api/audit-logs/chain/verify');
+  },
+
+  // Phase 1J CSV exports. Same query + permission as the JSON endpoints; return
+  // a blob + filename for the caller to save. The audit export drops page/
+  // pageSize (the server rejects them — export is the full filtered set).
+  exportSalesSummary(query: ReportSummaryQuery): Promise<{ blob: Blob; filename: string }> {
+    return downloadBlob(`/api/reports/sales-summary/export${reportQs(query)}`);
+  },
+  exportPurchaseSummary(query: ReportSummaryQuery): Promise<{ blob: Blob; filename: string }> {
+    return downloadBlob(`/api/reports/purchase-summary/export${reportQs(query)}`);
+  },
+  exportAuditLogs(query: ListAuditLogsQuery): Promise<{ blob: Blob; filename: string }> {
+    const { page: _page, pageSize: _pageSize, ...filters } = query;
+    return downloadBlob(`/api/audit-logs/export${auditQs(filters)}`);
   },
 };
 

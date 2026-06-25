@@ -1,5 +1,6 @@
 import { CSSProperties, FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../lib/api-client';
+import { saveBlob } from '../lib/download';
 import {
   ApiError,
   AuditActorType,
@@ -124,6 +125,9 @@ export function AuditLogsPage() {
   const [selected, setSelected] = useState<AuditLogDetail | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   // Chain integrity check on mount — the visible trust signal (plan §5.2).
@@ -198,6 +202,25 @@ export function AuditLogsPage() {
       setSelected(fresh);
     } catch (err) {
       setDetailError(describeError(err, '加载详情失败，请稍后重试'));
+    }
+  }
+
+  // Exports the CSV for the currently applied filter. Reuses inclusiveTo so the
+  // exported set matches the list set on the "today" boundary (plan §6.1).
+  async function onExport() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const { blob, filename } = await apiClient.exportAuditLogs({
+        ...applied,
+        to: inclusiveTo(applied.to),
+      });
+      saveBlob(blob, filename);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) setExportError('没有权限导出审计日志');
+      else setExportError(describeError(err, '导出失败，请稍后重试'));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -318,8 +341,12 @@ export function AuditLogsPage() {
           />
         </label>
         <button type="submit">筛选</button>
+        <button type="button" onClick={() => void onExport()} disabled={exporting}>
+          {exporting ? '导出中…' : '导出 CSV'}
+        </button>
       </form>
 
+      {exportError && <p style={{ color: 'crimson' }}>{exportError}</p>}
       {listError && <p style={{ color: 'crimson' }}>{listError}</p>}
 
       {listLoading ? (
