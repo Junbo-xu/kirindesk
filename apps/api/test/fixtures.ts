@@ -29,6 +29,7 @@ const ORDERS_MODULE_ID = 'a0000000-0000-0000-0000-000000000002';
 const PROCUREMENT_MODULE_ID = 'a0000000-0000-0000-0000-000000000003';
 const FINANCE_MODULE_ID = 'a0000000-0000-0000-0000-000000000004';
 const FILES_MODULE_ID = 'a0000000-0000-0000-0000-000000000005';
+const REPORTS_MODULE_ID = 'a0000000-0000-0000-0000-000000000006';
 const SYSTEM_MODULE_ID = 'a0000000-0000-0000-0000-000000000007';
 const AI_MODULE_ID = 'a0000000-0000-0000-0000-000000000008';
 const ADMIN_ROLE_ID = 'a1111111-1111-1111-1111-111111111111'; // tenant1, scope=all
@@ -98,6 +99,12 @@ export const COMMISSION_PAYOUT_PERMS = [
 // provider call is independently grantable from reading invocation records.
 export const AI_PERMS = ['ocr:view', 'ocr:process', 'ai:view', 'ai:process'] as const;
 
+// Phase 1F-D reports (reports module) and Phase 1I audit viewer (system module).
+// Phase 1J data export reuses these same view codes (no separate *:export code),
+// so granting them lets the export endpoints be exercised.
+export const REPORTS_PERMS = ['reports:view'] as const;
+export const AUDIT_PERMS = ['audit_logs:view'] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -109,6 +116,8 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
+  ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
+  ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
 ];
 
 interface RoleSpec {
@@ -208,7 +217,8 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
          ($4, 'files', '文件管理', 5),
          ($5, 'system', '系统管理', 7),
          ($6, 'finance', '财务管理', 4),
-         ($7, 'ai', 'AI/OCR', 8)
+         ($7, 'ai', 'AI/OCR', 8),
+         ($8, 'reports', '报表', 6)
        ON CONFLICT (code) DO NOTHING`,
       [
         CRM_MODULE_ID,
@@ -218,6 +228,7 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
         SYSTEM_MODULE_ID,
         FINANCE_MODULE_ID,
         AI_MODULE_ID,
+        REPORTS_MODULE_ID,
       ],
     );
 
