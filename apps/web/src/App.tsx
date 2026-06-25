@@ -23,6 +23,10 @@ import { CommissionPayoutsListPage } from './commission/CommissionPayoutsListPag
 import { CommissionPayoutDetailPage } from './commission/CommissionPayoutDetailPage';
 import { OcrPage } from './ai/OcrPage';
 import { CompletePage } from './ai/CompletePage';
+import { UsersListPage } from './users/UsersListPage';
+import { UserFormPage } from './users/UserFormPage';
+import { RolesListPage } from './roles/RolesListPage';
+import { RolePermissionsPage } from './roles/RolePermissionsPage';
 import { SettingsPage } from './settings/SettingsPage';
 
 // Placeholder home for the Foundation phase.
@@ -67,6 +71,12 @@ export function App() {
               <Route path="/commission/payouts/:id" element={<CommissionPayoutDetailPage />} />
               <Route path="/ai/ocr" element={<OcrPage />} />
               <Route path="/ai/complete" element={<CompletePage />} />
+              <Route path="/users" element={<UsersListPage />} />
+              <Route path="/users/new" element={<UserFormPage />} />
+              <Route path="/users/:id/edit" element={<UserFormPage />} />
+              <Route path="/roles" element={<RolesListPage />} />
+              <Route path="/roles/new" element={<RolePermissionsPage />} />
+              <Route path="/roles/:id/edit" element={<RolePermissionsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>
