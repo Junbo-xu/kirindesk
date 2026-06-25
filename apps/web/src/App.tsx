@@ -28,6 +28,7 @@ import { UserFormPage } from './users/UserFormPage';
 import { RolesListPage } from './roles/RolesListPage';
 import { RolePermissionsPage } from './roles/RolePermissionsPage';
 import { SettingsPage } from './settings/SettingsPage';
+import { AuditLogsPage } from './audit/AuditLogsPage';
 
 // Placeholder home for the Foundation phase.
 function HomePage() {
@@ -77,6 +78,7 @@ export function App() {
               <Route path="/roles" element={<RolesListPage />} />
               <Route path="/roles/new" element={<RolePermissionsPage />} />
               <Route path="/roles/:id/edit" element={<RolePermissionsPage />} />
+              <Route path="/audit-logs" element={<AuditLogsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

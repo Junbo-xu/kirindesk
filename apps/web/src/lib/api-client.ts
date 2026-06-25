@@ -1,5 +1,8 @@
 import {
   ApiError,
+  AuditChainVerifyResult,
+  AuditLogDetail,
+  AuditLogSummary,
   BaseCurrencyResponse,
   CommissionOrdersResponse,
   CommissionPayout,
@@ -21,6 +24,7 @@ import {
   CustomerResponse,
   FileResponse,
   FileDownloadToken,
+  ListAuditLogsQuery,
   ListPayoutsQuery,
   ListInvocationsQuery,
   LoginResponse,
@@ -549,6 +553,19 @@ export const apiClient = {
   listPermissionCatalog(): Promise<CatalogModule[]> {
     return request<CatalogModule[]>('/api/permissions');
   },
+
+  // Phase 1I audit log viewer. Read-only; tenant-isolated by RLS + dataScope.
+  // verifyAuditChain takes no chain_key — the server derives it from the
+  // authenticated tenant (never client-supplied).
+  listAuditLogs(query: ListAuditLogsQuery = {}): Promise<Paginated<AuditLogSummary>> {
+    return request<Paginated<AuditLogSummary>>(`/api/audit-logs${auditQs(query)}`);
+  },
+  getAuditLog(id: string): Promise<AuditLogDetail> {
+    return request<AuditLogDetail>(`/api/audit-logs/${id}`);
+  },
+  verifyAuditChain(): Promise<AuditChainVerifyResult> {
+    return request<AuditChainVerifyResult>('/api/audit-logs/chain/verify');
+  },
 };
 
 function payoutQs(query: ListPayoutsQuery): string {
@@ -587,6 +604,22 @@ function invocationQs(query: ListInvocationsQuery): string {
   if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
   if (query.status) params.set('status', query.status);
   if (query.fileId) params.set('fileId', query.fileId);
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
+function auditQs(query: ListAuditLogsQuery): string {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  if (query.actorId) params.set('actorId', query.actorId);
+  if (query.actorType) params.set('actorType', query.actorType);
+  if (query.action) params.set('action', query.action);
+  if (query.resourceType) params.set('resourceType', query.resourceType);
+  if (query.resourceId) params.set('resourceId', query.resourceId);
+  if (query.requestId) params.set('requestId', query.requestId);
   const qs = params.toString();
   return qs ? `?${qs}` : '';
 }

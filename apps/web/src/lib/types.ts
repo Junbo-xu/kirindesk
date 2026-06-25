@@ -658,6 +658,55 @@ export interface CatalogModule {
   permissions: CatalogPermission[];
 }
 
+// ---- Phase 1I: audit log viewer (read-only consumer of audit_logs) -------
+
+export type AuditActorType = 'tenant_user' | 'platform_admin' | 'system';
+
+// List/detail share these summary fields. `id` is a bigint surfaced as a
+// string (precision-safe); hash-chain internals are never exposed by the API.
+export interface AuditLogSummary {
+  id: string;
+  tenantId: string | null;
+  actorType: string;
+  actorId: string;
+  actorName: string | null; // resolved for tenant_user actors, else null
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  createdAt: string;
+}
+
+// GET /api/audit-logs/:id — adds the before/after snapshots + context.
+export interface AuditLogDetail extends AuditLogSummary {
+  before: unknown;
+  after: unknown;
+  metadata: unknown;
+  reason: string | null;
+  requestId: string | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
+export interface ListAuditLogsQuery {
+  page?: number;
+  pageSize?: number;
+  from?: string;
+  to?: string;
+  actorId?: string;
+  actorType?: AuditActorType;
+  action?: string;
+  resourceType?: string;
+  resourceId?: string;
+  requestId?: string;
+}
+
+// GET /api/audit-logs/chain/verify — tenant chain integrity conclusion.
+export interface AuditChainVerifyResult {
+  ok: boolean;
+  total: number;
+  failedAt?: { id: string; reason: string };
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;
