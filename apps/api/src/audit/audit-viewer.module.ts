@@ -4,21 +4,21 @@ import { AuthModule } from '../auth/auth.module';
 import { AuditModule } from './audit.module';
 import { AuditController } from './audit.controller';
 import { AuditQueryService } from './audit-query.service';
+import { AuditExportService } from './audit-export.service';
 
 /**
- * Read-only audit-log viewer module (plan §3). Kept SEPARATE from the write-side
- * AuditModule: AuditModule is a leaf imported by RbacModule/AuthModule for the
- * write path, so importing those guards back into AuditModule would form a
- * cycle. This module imports them cleanly (mirroring ReportsModule:
- * RbacModule + AuditModule + AuthModule) and ships only the read controller +
- * AuditQueryService. AuditModule is imported because the shared PermissionGuard
- * depends on AuditService, which AuditModule exports; AuditQueryService itself
- * never touches it — viewing never writes audit. APP_POOL comes from the global
- * DatabaseModule.
+ * Read-only audit-log viewer + export module (plan §3). Kept SEPARATE from the
+ * write-side AuditModule: AuditModule is a leaf imported by RbacModule/AuthModule
+ * for the write path, so importing those guards back into AuditModule would form
+ * a cycle. This module imports them cleanly (mirroring ReportsModule:
+ * RbacModule + AuditModule + AuthModule). AuditModule (exporting AuditService) is
+ * imported both for the shared PermissionGuard and for AuditExportService, which
+ * writes one audit event per export (1J §5.2) — viewing/listing still never
+ * writes audit. APP_POOL comes from the global DatabaseModule.
  */
 @Module({
   imports: [RbacModule, AuditModule, AuthModule],
   controllers: [AuditController],
-  providers: [AuditQueryService],
+  providers: [AuditQueryService, AuditExportService],
 })
 export class AuditViewerModule {}

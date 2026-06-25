@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { ListAuditLogsQuery } from './dto/list-audit-logs.query';
+import { AuditExportQuery } from './dto/audit-export.query';
 import {
   AuditLogDetail,
   AuditLogNotFoundException,
@@ -26,8 +27,25 @@ export interface ListResult {
   total: number;
 }
 
+// Full filtered set for export, plus whether the cap clipped it (plan §2.4).
+export interface ExportResult {
+  data: AuditLogSummary[];
+  truncated: boolean;
+}
+
+// The filter fields shared by list and export (the structural shape the WHERE
+// builder consumes). Both ListAuditLogsQuery and AuditExportQuery satisfy it.
+type AuditLogFilters = Pick<
+  ListAuditLogsQuery,
+  'from' | 'to' | 'actorId' | 'actorType' | 'action' | 'resourceType' | 'resourceId' | 'requestId'
+>;
+
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
+
+// Hard ceiling on rows per audit export (plan §5.1): bounds memory/soft-DoS on
+// the ever-growing append-only table. Overridable per call for tests.
+export const AUDIT_EXPORT_CAP = 50000;
 
 // Columns selected for list rows (summary shape). actor_name comes from a
 // tenant-safe LEFT JOIN on users (same tenant by RLS). Hash-chain internals are
@@ -59,11 +77,13 @@ export class AuditQueryService {
     return dataScope === 'own' || dataScope === 'assigned';
   }
 
-  async list(actor: RequestActor, query: ListAuditLogsQuery): Promise<ListResult> {
-    const page = query.page ?? DEFAULT_PAGE;
-    const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
-    const offset = (page - 1) * pageSize;
-
+  // Shared WHERE builder for list + export (plan §3.6): dataScope (own anchors
+  // to actor_id) plus the optional filters, all parameterized. Both paths use
+  // this so the export set can never diverge from the list set.
+  private buildWhere(
+    actor: RequestActor,
+    filters: AuditLogFilters,
+  ): { where: string; params: unknown[] } {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
@@ -71,40 +91,49 @@ export class AuditQueryService {
       params.push(actor.userId);
       conditions.push(`al.actor_id = $${params.length}`);
     }
-    if (query.from) {
-      params.push(query.from);
+    if (filters.from) {
+      params.push(filters.from);
       conditions.push(`al.created_at >= $${params.length}`);
     }
-    if (query.to) {
-      params.push(query.to);
+    if (filters.to) {
+      params.push(filters.to);
       conditions.push(`al.created_at <= $${params.length}`);
     }
-    if (query.actorId) {
-      params.push(query.actorId);
+    if (filters.actorId) {
+      params.push(filters.actorId);
       conditions.push(`al.actor_id = $${params.length}`);
     }
-    if (query.actorType) {
-      params.push(query.actorType);
+    if (filters.actorType) {
+      params.push(filters.actorType);
       conditions.push(`al.actor_type = $${params.length}`);
     }
-    if (query.action) {
-      params.push(query.action);
+    if (filters.action) {
+      params.push(filters.action);
       conditions.push(`al.action = $${params.length}`);
     }
-    if (query.resourceType) {
-      params.push(query.resourceType);
+    if (filters.resourceType) {
+      params.push(filters.resourceType);
       conditions.push(`al.resource_type = $${params.length}`);
     }
-    if (query.resourceId) {
-      params.push(query.resourceId);
+    if (filters.resourceId) {
+      params.push(filters.resourceId);
       conditions.push(`al.resource_id = $${params.length}`);
     }
-    if (query.requestId) {
-      params.push(query.requestId);
+    if (filters.requestId) {
+      params.push(filters.requestId);
       conditions.push(`al.request_id = $${params.length}`);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    return { where, params };
+  }
+
+  async list(actor: RequestActor, query: ListAuditLogsQuery): Promise<ListResult> {
+    const page = query.page ?? DEFAULT_PAGE;
+    const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
+    const offset = (page - 1) * pageSize;
+
+    const { where, params } = this.buildWhere(actor, query);
 
     return withTenantContext(
       this.pool,
@@ -129,6 +158,39 @@ export class AuditQueryService {
           pageSize,
           total: parseInt(totalRes.rows[0].count, 10),
         };
+      },
+    );
+  }
+
+  /**
+   * Read-only full-set fetch for export (plan §2.4/§3.6): same WHERE as list
+   * (dataScope + filters + RLS), no offset, a single `LIMIT cap + 1` so we can
+   * tell whether the cap clipped the result. Returns at most `cap` rows plus a
+   * `truncated` flag — never silently drops rows.
+   */
+  async listForExport(
+    actor: RequestActor,
+    query: AuditExportQuery,
+    cap: number = AUDIT_EXPORT_CAP,
+  ): Promise<ExportResult> {
+    const { where, params } = this.buildWhere(actor, query);
+
+    return withTenantContext(
+      this.pool,
+      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      async (client) => {
+        const dataRes = await client.query<AuditLogRow>(
+          `SELECT ${SUMMARY_COLUMNS}
+             FROM audit_logs al
+             ${ACTOR_JOIN}
+             ${where}
+            ORDER BY al.created_at DESC, al.id DESC
+            LIMIT $${params.length + 1}`,
+          [...params, cap + 1],
+        );
+        const truncated = dataRes.rows.length > cap;
+        const rows = truncated ? dataRes.rows.slice(0, cap) : dataRes.rows;
+        return { data: rows.map(toAuditLogSummary), truncated };
       },
     );
   }

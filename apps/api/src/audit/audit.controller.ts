@@ -1,11 +1,14 @@
-import { Controller, Get, Param, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Controller, Get, Param, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuditQueryService, RequestActor } from './audit-query.service';
+import { AuditExportService } from './audit-export.service';
 import { ListAuditLogsQuery } from './dto/list-audit-logs.query';
+import { AuditExportQuery } from './dto/audit-export.query';
+import { sendExportFile } from '../common/export-response';
 
 interface TenantJwtUser {
   sub: string;
@@ -22,7 +25,10 @@ interface TenantJwtUser {
 @Controller('api/audit-logs')
 @UseGuards(TenantAuthGuard, PermissionGuard)
 export class AuditController {
-  constructor(private readonly auditQueryService: AuditQueryService) {}
+  constructor(
+    private readonly auditQueryService: AuditQueryService,
+    private readonly auditExportService: AuditExportService,
+  ) {}
 
   private actor(user: TenantJwtUser, req: Request): RequestActor {
     return {
@@ -40,6 +46,21 @@ export class AuditController {
     @Query() query: ListAuditLogsQuery,
   ) {
     return this.auditQueryService.list(this.actor(user, req), query);
+  }
+
+  // CSV export of the same filtered list (plan §3). Static route declared
+  // before :id (and :id constrained to digits) so 'export' is never parsed as
+  // an id. @Res so we stream the file ourselves with download headers.
+  @Get('export')
+  @RequirePermission('audit_logs', 'view')
+  async export(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Query() query: AuditExportQuery,
+    @Res() res: Response,
+  ) {
+    const file = await this.auditExportService.exportLogs(this.actor(user, req), query);
+    sendExportFile(res, file);
   }
 
   // Static route declared BEFORE :id (and :id constrained to digits) so 'chain'
