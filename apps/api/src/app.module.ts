@@ -20,6 +20,7 @@ import { AiModule } from './ai/ai.module';
 import { AuditViewerModule } from './audit/audit-viewer.module';
 import { PlatformTenantsModule } from './platform-tenants/platform-tenants.module';
 import { TenantLifecycleModule } from './tenant-lifecycle/tenant-lifecycle.module';
+import { SupportAccessModule } from './support-access/support-access.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { TenantLifecycleModule } from './tenant-lifecycle/tenant-lifecycle.modul
     AuditViewerModule,
     PlatformTenantsModule,
     TenantLifecycleModule,
+    SupportAccessModule,
   ],
 })
 export class AppModule {}

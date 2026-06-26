@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcryptjs';
-import { withTenantContext } from '../database/context';
+import { ActorType, withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { RbacService, scopeWithin } from '../rbac/rbac.service';
@@ -29,6 +29,10 @@ export interface RequestActor {
   userId: string;
   tenantId: string;
   dataScope: string;
+  // Read-path session actor type (defaults to 'tenant_user'). The platform
+  // support-access path (1K-B §3.4) passes 'platform_admin' to read tenant
+  // user/role config honestly. Write methods always run as tenant_user.
+  actorType?: ActorType;
 }
 
 export interface ListResult {
@@ -166,7 +170,11 @@ export class UsersService {
 
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const totalRes = await client.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM users ${where}`,
@@ -190,7 +198,11 @@ export class UsersService {
   async getOne(actor: RequestActor, id: string): Promise<UserDetail> {
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const row = await this.fetchInScope(client, actor, id);
         const roles = await this.loadUserRoles(client, id);

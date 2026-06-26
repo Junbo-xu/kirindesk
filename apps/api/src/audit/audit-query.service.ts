@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Pool } from 'pg';
-import { withTenantContext } from '../database/context';
+import { ActorType, withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { ListAuditLogsQuery } from './dto/list-audit-logs.query';
 import { AuditExportQuery } from './dto/audit-export.query';
@@ -18,6 +18,12 @@ export interface RequestActor {
   userId: string;
   tenantId: string;
   dataScope: string;
+  // Session actor type for withTenantContext. Defaults to 'tenant_user' (the
+  // 1I viewer). The platform support-access path (1K-B §3.4) passes
+  // 'platform_admin' so the read session is honestly attributed — never
+  // impersonating a tenant user. audit_logs_tenant_read keys on tenant_id, so
+  // either actor type reads the same rows once the tenant context is set.
+  actorType?: ActorType;
 }
 
 export interface ListResult {
@@ -137,7 +143,11 @@ export class AuditQueryService {
 
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const totalRes = await client.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM audit_logs al ${where}`,
@@ -177,7 +187,11 @@ export class AuditQueryService {
 
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const dataRes = await client.query<AuditLogRow>(
           `SELECT ${SUMMARY_COLUMNS}
@@ -198,7 +212,11 @@ export class AuditQueryService {
   async getOne(actor: RequestActor, id: string): Promise<AuditLogDetail> {
     const row = await withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const params: unknown[] = [id];
         let scopeClause = '';
@@ -235,7 +253,11 @@ export class AuditQueryService {
   async verifyTenantChain(actor: RequestActor): Promise<ChainVerifyResult> {
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         // ORDER BY the bigint column (qualified) — NOT the `id::text` output
         // alias, which would sort lexicographically (1,10,100,…,2) and break the

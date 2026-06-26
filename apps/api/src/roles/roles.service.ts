@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Pool, PoolClient } from 'pg';
-import { withTenantContext } from '../database/context';
+import { ActorType, withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { RbacService, scopeWithin } from '../rbac/rbac.service';
@@ -32,6 +32,10 @@ export interface RequestActor {
   userId: string;
   tenantId: string;
   dataScope: string;
+  // Read-path session actor type (defaults to 'tenant_user'). The platform
+  // support-access path (1K-B §3.4) passes 'platform_admin'. Write methods
+  // always run as tenant_user.
+  actorType?: ActorType;
 }
 
 const UNIQUE_VIOLATION = '23505';
@@ -60,7 +64,11 @@ export class RolesService {
   async list(actor: RequestActor): Promise<RoleSummary[]> {
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const { rows } = await client.query<RoleCountsRow>(
           `SELECT ${ROLE_SELECT} FROM roles r ORDER BY r.is_system DESC, r.name`,
@@ -73,7 +81,11 @@ export class RolesService {
   async getOne(actor: RequestActor, id: string): Promise<RoleDetail> {
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const row = await this.fetchInScope(client, id);
         const permissions = await this.loadRolePermissions(client, id);
@@ -87,7 +99,11 @@ export class RolesService {
   async listPermissionCatalog(actor: RequestActor): Promise<CatalogModule[]> {
     return withTenantContext(
       this.pool,
-      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        actorType: actor.actorType ?? 'tenant_user',
+      },
       async (client) => {
         const { rows } = await client.query<{
           module_code: string;

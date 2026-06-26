@@ -20,5 +20,9 @@ import { AuditExportService } from './audit-export.service';
   imports: [RbacModule, AuditModule, AuthModule],
   controllers: [AuditController],
   providers: [AuditQueryService, AuditExportService],
+  // AuditQueryService is exported so the platform support-access module (1K-B)
+  // can reuse its read-only list/getOne/verifyTenantChain under a
+  // platform_admin actor (plan §3.4) — no second audit query implementation.
+  exports: [AuditQueryService],
 })
 export class AuditViewerModule {}
