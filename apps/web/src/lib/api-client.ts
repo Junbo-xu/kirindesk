@@ -59,6 +59,9 @@ import {
   UpdateRoleInput,
   PermissionGrantInput,
   CatalogModule,
+  SupportGrant,
+  CreateSupportGrantInput,
+  ListSupportGrantsQuery,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -620,6 +623,31 @@ export const apiClient = {
   exportAuditLogs(query: ListAuditLogsQuery): Promise<{ blob: Blob; filename: string }> {
     const { page: _page, pageSize: _pageSize, ...filters } = query;
     return downloadBlob(`/api/audit-logs/export${auditQs(filters)}`);
+  },
+
+  // Phase 1K-B tenant-side support access. The tenant authorizes a named
+  // platform admin (read_only, time-limited, with a reason); reads/writes are
+  // tenant-isolated by RLS and gated by support_access:grant/view/revoke. Every
+  // write is audited into the tenant chain (visible in the 1I audit viewer).
+  createSupportGrant(input: CreateSupportGrantInput): Promise<SupportGrant> {
+    return request<SupportGrant>('/api/support-access', { method: 'POST', body: input });
+  },
+  listSupportGrants(query: ListSupportGrantsQuery = {}): Promise<Paginated<SupportGrant>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    return request<Paginated<SupportGrant>>(`/api/support-access${qs ? `?${qs}` : ''}`);
+  },
+  getSupportGrant(id: string): Promise<SupportGrant> {
+    return request<SupportGrant>(`/api/support-access/${id}`);
+  },
+  revokeSupportGrant(id: string, reason: string): Promise<SupportGrant> {
+    return request<SupportGrant>(`/api/support-access/${id}/revoke`, {
+      method: 'POST',
+      body: { reason },
+    });
   },
 };
 

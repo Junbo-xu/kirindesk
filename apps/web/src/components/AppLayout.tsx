@@ -28,6 +28,7 @@ export function AppLayout() {
           <Link to="/users">用户</Link>
           <Link to="/roles">角色</Link>
           <Link to="/audit-logs">审计</Link>
+          <Link to="/support-access">支持访问</Link>
           <Link to="/settings">设置</Link>
           <span style={{ color: '#555' }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>

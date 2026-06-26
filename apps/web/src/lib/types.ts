@@ -707,6 +707,73 @@ export interface AuditChainVerifyResult {
   failedAt?: { id: string; reason: string };
 }
 
+// ---- Phase 1K-B: platform support access (tenant grant + platform read) ----
+
+// Scope a grant authorizes. Only read_only this phase (mirrors the backend
+// CHECK + DTO); enumerated so a wider scope is an explicit, reviewed add.
+export type SupportAccessScope = 'read_only';
+
+// Stored grant lifecycle status (037 CHECK). Validity is DERIVED by the UI from
+// status + expires_at (an `active` row past expires_at renders as expired).
+export type GrantStatus = 'pending' | 'active' | 'revoked' | 'expired';
+
+// A support-access grant as returned by the tenant-side endpoints. A grant is a
+// governance credential (who/why/scope/when + lifecycle stamps), not business
+// data; platformAdminEmail is joined so the tenant sees who they authorized.
+export interface SupportGrant {
+  id: string;
+  tenantId: string;
+  platformAdminId: string;
+  platformAdminEmail: string | null;
+  scope: string;
+  reason: string;
+  status: string;
+  expiresAt: string;
+  grantedByUserId: string;
+  approvedAt: string | null;
+  revokedByUserId: string | null;
+  revokedAt: string | null;
+  revokeReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateSupportGrantInput {
+  platformAdminEmail: string;
+  reason: string;
+  scope: SupportAccessScope;
+  expiresAt: string; // ISO-8601; the server re-checks > now()
+}
+
+export interface ListSupportGrantsQuery {
+  page?: number;
+  pageSize?: number;
+  status?: GrantStatus;
+}
+
+// Platform-side login (POST /api/platform-auth/login — no tenantSlug). The
+// access token here is platform-jwt, stored under a separate key from the
+// tenant token (kd_platform_token vs kd_access_token).
+export interface PlatformLoginResponse {
+  accessToken: string;
+  admin: { id: string; email: string; name: string };
+}
+
+export interface PlatformAdmin {
+  id: string;
+  email: string;
+}
+
+// "Which tenants named me?" (GET /api/platform/support/grants). Minimal shape —
+// the platform admin sees only the authorization terms, never tenant data here.
+export interface MyGrant {
+  grantId: string;
+  tenantId: string;
+  scope: string;
+  status: string;
+  expiresAt: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

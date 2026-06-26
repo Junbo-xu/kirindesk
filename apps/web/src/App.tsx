@@ -29,6 +29,13 @@ import { RolesListPage } from './roles/RolesListPage';
 import { RolePermissionsPage } from './roles/RolePermissionsPage';
 import { SettingsPage } from './settings/SettingsPage';
 import { AuditLogsPage } from './audit/AuditLogsPage';
+import { SupportAccessPage } from './support-access/SupportAccessPage';
+import { PlatformAuthProvider } from './platform/PlatformAuthContext';
+import { PlatformProtectedRoute } from './platform/PlatformProtectedRoute';
+import { PlatformLayout } from './platform/PlatformLayout';
+import { PlatformLoginPage } from './platform/PlatformLoginPage';
+import { PlatformGrantsPage } from './platform/PlatformGrantsPage';
+import { PlatformTenantViewPage } from './platform/PlatformTenantViewPage';
 
 // Placeholder home for the Foundation phase.
 function HomePage() {
@@ -79,9 +86,36 @@ export function App() {
               <Route path="/roles/new" element={<RolePermissionsPage />} />
               <Route path="/roles/:id/edit" element={<RolePermissionsPage />} />
               <Route path="/audit-logs" element={<AuditLogsPage />} />
+              <Route path="/support-access" element={<SupportAccessPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>
+          {/* Platform console: a fully separate auth subtree (plan §5.3/§5.5) —
+              its own provider, login, protected route and layout, isolated from
+              the tenant AuthProvider above (kd_platform_token vs kd_access_token). */}
+          <Route
+            path="/platform/*"
+            element={
+              <PlatformAuthProvider>
+                <Routes>
+                  <Route path="login" element={<PlatformLoginPage />} />
+                  <Route element={<PlatformProtectedRoute />}>
+                    <Route element={<PlatformLayout />}>
+                      <Route path="support-grants" element={<PlatformGrantsPage />} />
+                      <Route
+                        path="support/tenants/:tenantId"
+                        element={<PlatformTenantViewPage />}
+                      />
+                      <Route
+                        path="*"
+                        element={<Navigate to="/platform/support-grants" replace />}
+                      />
+                    </Route>
+                  </Route>
+                </Routes>
+              </PlatformAuthProvider>
+            }
+          />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AuthProvider>
