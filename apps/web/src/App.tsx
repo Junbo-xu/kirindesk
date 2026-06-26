@@ -35,6 +35,7 @@ import { PlatformProtectedRoute } from './platform/PlatformProtectedRoute';
 import { PlatformLayout } from './platform/PlatformLayout';
 import { PlatformLoginPage } from './platform/PlatformLoginPage';
 import { PlatformGrantsPage } from './platform/PlatformGrantsPage';
+import { PlatformTenantsPage } from './platform/PlatformTenantsPage';
 import { PlatformTenantViewPage } from './platform/PlatformTenantViewPage';
 
 // Placeholder home for the Foundation phase.
@@ -101,6 +102,7 @@ export function App() {
                   <Route path="login" element={<PlatformLoginPage />} />
                   <Route element={<PlatformProtectedRoute />}>
                     <Route element={<PlatformLayout />}>
+                      <Route path="tenants" element={<PlatformTenantsPage />} />
                       <Route path="support-grants" element={<PlatformGrantsPage />} />
                       <Route
                         path="support/tenants/:tenantId"

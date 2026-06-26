@@ -21,6 +21,9 @@ export function PlatformLayout() {
       >
         <strong>KirinDesk · 平台控制台</strong>
         <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <Link to="/platform/tenants" style={{ color: '#cfe' }}>
+            租户
+          </Link>
           <Link to="/platform/support-grants" style={{ color: '#cfe' }}>
             我的授权
           </Link>

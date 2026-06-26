@@ -774,6 +774,32 @@ export interface MyGrant {
   expiresAt: string;
 }
 
+// Platform-side tenant lifecycle (1K-A, plan §5.3). The three persisted statuses
+// (no derived state — unlike support grants). 'deactivated' is the terminal
+// soft-stop ("delete" in the UI sense); there is no hard delete.
+export type TenantStatus = 'active' | 'suspended' | 'deactivated';
+
+// Tenant metadata returned by /api/platform/tenants — NEVER business data (§3.4).
+// Date columns arrive as ISO strings over JSON.
+export interface PlatformTenantSummary {
+  id: string;
+  name: string;
+  slug: string;
+  status: TenantStatus;
+  suspendedAt: string | null;
+  suspendedReason: string | null;
+  contactEmail: string | null;
+  contactPhone: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListPlatformTenantsQuery {
+  page?: number;
+  pageSize?: number;
+  status?: TenantStatus;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

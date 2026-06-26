@@ -4,11 +4,13 @@ import {
   AuditLogDetail,
   AuditLogSummary,
   ListAuditLogsQuery,
+  ListPlatformTenantsQuery,
   ListUsersQuery,
   MyGrant,
   Paginated,
   PlatformAdmin,
   PlatformLoginResponse,
+  PlatformTenantSummary,
   RoleSummary,
   UserSummary,
 } from './types';
@@ -125,6 +127,42 @@ export const platformClient = {
   // "Which tenants named me?" — no per-tenant authorization, no audit (§3.6).
   listMyGrants(): Promise<MyGrant[]> {
     return platformRequest<MyGrant[]>('/api/platform/support/grants');
+  },
+
+  // Tenant lifecycle (1K-A, plan §3.4/§5.3). Metadata only — no business data.
+  // The transition routes are POST /:id/{suspend,deactivate,activate}; suspend &
+  // deactivate require a reason, activate's note is optional. 409 on an illegal
+  // transition (e.g. suspend a non-active tenant), 404 on a missing tenant.
+  listTenants(query: ListPlatformTenantsQuery = {}): Promise<Paginated<PlatformTenantSummary>> {
+    const params = new URLSearchParams();
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    if (query.status) params.set('status', query.status);
+    const qs = params.toString();
+    return platformRequest<Paginated<PlatformTenantSummary>>(
+      `/api/platform/tenants${qs ? `?${qs}` : ''}`,
+    );
+  },
+  getTenant(id: string): Promise<PlatformTenantSummary> {
+    return platformRequest<PlatformTenantSummary>(`/api/platform/tenants/${id}`);
+  },
+  suspendTenant(id: string, reason: string): Promise<PlatformTenantSummary> {
+    return platformRequest<PlatformTenantSummary>(`/api/platform/tenants/${id}/suspend`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+  deactivateTenant(id: string, reason: string): Promise<PlatformTenantSummary> {
+    return platformRequest<PlatformTenantSummary>(`/api/platform/tenants/${id}/deactivate`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+  activateTenant(id: string, reason?: string): Promise<PlatformTenantSummary> {
+    return platformRequest<PlatformTenantSummary>(`/api/platform/tenants/${id}/activate`, {
+      method: 'POST',
+      body: reason ? { reason } : {},
+    });
   },
 
   // Authorized read-only views over a specific tenant. Each requires an active
