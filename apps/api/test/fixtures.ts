@@ -105,6 +105,17 @@ export const AI_PERMS = ['ocr:view', 'ocr:process', 'ai:view', 'ai:process'] as 
 export const REPORTS_PERMS = ['reports:view'] as const;
 export const AUDIT_PERMS = ['audit_logs:view'] as const;
 
+// Phase 1K-B support access (system module). Granted ONLY to the admin roles
+// (scope=all) below — deliberately NOT in SEED_PERMS, whose codes go to every
+// fixture role: the sales (scope=own) and no-role users must lack these codes
+// so the 403 / default-deny cases hold (plan §6.1). Test fixture only — the
+// product seed is separate (§2.7) and the two never couple.
+export const SUPPORT_ACCESS_PERMS = [
+  'support_access:grant',
+  'support_access:revoke',
+  'support_access:view',
+] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -241,6 +252,17 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    // Support-access permission rows (system module). Inserted so they exist,
+    // but granted selectively below — NOT via the all-roles loop.
+    for (const code of SUPPORT_ACCESS_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [SYSTEM_MODULE_ID, code, action],
+      );
+    }
+
     const allCodes = SEED_PERMS.map((p) => p.code);
     const permRes = await client.query<{ id: string; code: string }>(
       `SELECT id, code FROM permissions WHERE code = ANY($1)`,
@@ -264,6 +286,27 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,
           [spec.tenantId, spec.roleId, permId[code], spec.scope],
+        );
+      }
+    }
+
+    // Support-access grants: ONLY the two admin roles (scope=all). The sales
+    // (scope=own) and no-role users get none, so the 403 / default-deny tests
+    // hold (plan §6.1). Both tenant admins get them so cross-tenant isolation
+    // can be exercised (tenant2 admin authorizing for its own tenant).
+    const supportPermRes = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [SUPPORT_ACCESS_PERMS as unknown as string[]],
+    );
+    for (const { id: permissionId } of supportPermRes.rows) {
+      for (const { roleId, tenantId } of [
+        { roleId: ADMIN_ROLE_ID, tenantId: TEST_TENANT_ID },
+        { roleId: T2_ADMIN_ROLE_ID, tenantId: TEST_TENANT2_ID },
+      ]) {
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, 'all')`,
+          [tenantId, roleId, permissionId],
         );
       }
     }

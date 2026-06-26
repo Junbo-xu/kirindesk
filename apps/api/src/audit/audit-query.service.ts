@@ -93,6 +93,16 @@ export class AuditQueryService {
     const conditions: string[] = [];
     const params: unknown[] = [];
 
+    // Explicit tenant scope (plan §3.4 isolation). RLS already pins a
+    // tenant_user to its own rows, but the platform support-access path sets the
+    // session actor_type='platform_admin', and audit_logs_tenant_read also
+    // exposes platform-global rows (tenant_id IS NULL) to that actor. Pinning
+    // al.tenant_id = <tenant> here excludes those foreign-chain rows so a
+    // support session sees ONLY the authorized tenant's events — a no-op for a
+    // tenant_user (whose rows always carry this tenant_id).
+    params.push(actor.tenantId);
+    conditions.push(`al.tenant_id = $${params.length}`);
+
     if (this.restrictsToOwner(actor.dataScope)) {
       params.push(actor.userId);
       conditions.push(`al.actor_id = $${params.length}`);
@@ -219,10 +229,14 @@ export class AuditQueryService {
       },
       async (client) => {
         const params: unknown[] = [id];
-        let scopeClause = '';
+        // Explicit tenant scope (see buildWhere): excludes platform-global
+        // (tenant_id IS NULL) rows a platform_admin support session could
+        // otherwise read via audit_logs_tenant_read; a no-op for tenant_user.
+        params.push(actor.tenantId);
+        let scopeClause = ` AND al.tenant_id = $${params.length}`;
         if (this.restrictsToOwner(actor.dataScope)) {
           params.push(actor.userId);
-          scopeClause = ` AND al.actor_id = $${params.length}`;
+          scopeClause += ` AND al.actor_id = $${params.length}`;
         }
         // id is a bigint passed as a digit string (controller constrains :id to
         // \d+); never parsed to a JS number, so large ids keep full precision.
@@ -262,13 +276,19 @@ export class AuditQueryService {
         // ORDER BY the bigint column (qualified) — NOT the `id::text` output
         // alias, which would sort lexicographically (1,10,100,…,2) and break the
         // chain order. Numeric id ASC reproduces the CLI's scan exactly.
+        // tenant_id pinned explicitly: a platform_admin support session must
+        // verify ONLY this tenant's chain, never the interleaved platform-global
+        // (tenant_id IS NULL) rows audit_logs_tenant_read also exposes to it.
+        // No-op for a tenant_user (RLS already pins it to this tenant).
         const { rows } = await client.query<ChainRow>(
           `SELECT al.id::text AS id, al.tenant_id, al.actor_type, al.actor_id, al.action,
                   al.resource_type, al.resource_id, al.before_json, al.after_json,
                   al.metadata_json, al.request_id, al.ip_address, al.user_agent, al.reason,
                   al.row_hash, al.prev_hash, al.hash_version, al.created_at
              FROM audit_logs al
+            WHERE al.tenant_id = $1
             ORDER BY al.id ASC`,
+          [actor.tenantId],
         );
         return verifyChainRows(rows);
       },
