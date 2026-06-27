@@ -2,8 +2,10 @@ import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '
 import { PlatformAuthGuard } from '../platform-auth/platform-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { PlatformTenantsService } from './platform-tenants.service';
+import { TenantOnboardingService } from './tenant-onboarding.service';
 import { ListTenantsQuery } from './dto/list-tenants.query';
 import { ActivateTenantDto, TenantReasonDto } from './dto/tenant-lifecycle.dto';
+import { CreateTenantDto } from './dto/create-tenant.dto';
 
 interface PlatformJwtUser {
   sub: string;
@@ -18,7 +20,16 @@ interface PlatformJwtUser {
 @Controller('api/platform/tenants')
 @UseGuards(PlatformAuthGuard)
 export class PlatformTenantsController {
-  constructor(private readonly tenants: PlatformTenantsService) {}
+  constructor(
+    private readonly tenants: PlatformTenantsService,
+    private readonly onboarding: TenantOnboardingService,
+  ) {}
+
+  // POST / must be declared before GET ':id' to avoid route shadowing.
+  @Post()
+  async provision(@CurrentUser() user: PlatformJwtUser, @Body() dto: CreateTenantDto) {
+    return this.onboarding.provision(user.sub, dto);
+  }
 
   @Get()
   async list(@Query() query: ListTenantsQuery) {
