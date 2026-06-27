@@ -20,6 +20,8 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { UsersService, RequestActor } from './users.service';
+import { QuotaGuard } from '../subscription/quota.guard';
+import { CheckQuota } from '../subscription/quota.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ListUsersQuery } from './dto/list-users.query';
@@ -50,6 +52,8 @@ export class UsersController {
   }
 
   @Post()
+  @UseGuards(QuotaGuard)
+  @CheckQuota('users')
   @RequirePermission('users', 'create')
   async create(
     @CurrentUser() user: TenantJwtUser,

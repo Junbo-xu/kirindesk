@@ -21,6 +21,7 @@ import { AuditViewerModule } from './audit/audit-viewer.module';
 import { PlatformTenantsModule } from './platform-tenants/platform-tenants.module';
 import { TenantLifecycleModule } from './tenant-lifecycle/tenant-lifecycle.module';
 import { SupportAccessModule } from './support-access/support-access.module';
+import { SubscriptionModule } from './subscription/subscription.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { SupportAccessModule } from './support-access/support-access.module';
     PlatformTenantsModule,
     TenantLifecycleModule,
     SupportAccessModule,
+    SubscriptionModule,
   ],
 })
 export class AppModule {}

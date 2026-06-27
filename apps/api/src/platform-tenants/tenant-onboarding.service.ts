@@ -147,6 +147,14 @@ export class TenantOnboardingService {
         throw new InternalServerErrorException('Failed to initialise audit chain');
       }
 
+      // ⑦ quota_usage genesis row (plan §1M §3.2 / §6 test #1).
+      //   user_count starts at 1 (the owner just inserted above).
+      await client.query(
+        `INSERT INTO tenant_quota_usage (tenant_id, user_count, storage_bytes, ai_calls_month, ai_calls_reset_at, updated_at)
+         VALUES ($1, 1, 0, 0, date_trunc('month', now()), now())`,
+        [tenantId],
+      );
+
       await client.query('COMMIT');
 
       tenant = toTenantSummary(tenantRow);

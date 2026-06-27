@@ -5,6 +5,7 @@ import { ActorType, withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { RbacService, scopeWithin } from '../rbac/rbac.service';
+import { QuotaService } from '../subscription/quota.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ListUsersQuery } from './dto/list-users.query';
@@ -59,6 +60,7 @@ export class UsersService {
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
     private readonly rbacService: RbacService,
+    private readonly quota: QuotaService,
   ) {}
 
   // --- auth-facing reads (existing; unchanged signatures) ---
@@ -142,6 +144,9 @@ export class UsersService {
       after: { ...toUserSummary(row), roles },
     });
 
+    void this.quota.increment(actor.tenantId, actor.userId).catch(() =>
+      this.logger.warn('quota increment failed for user.create'),
+    );
     return toUserDetail(row, roles);
   }
 
@@ -312,6 +317,10 @@ export class UsersService {
       before: toUserSummary(before),
       after: { ...toUserSummary(before), status: 'inactive', deleted: true },
     });
+
+    void this.quota.decrement(actor.tenantId, actor.userId).catch(() =>
+      this.logger.warn('quota decrement failed for user.deactivate'),
+    );
   }
 
   // --- helpers ---

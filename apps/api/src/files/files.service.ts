@@ -6,6 +6,7 @@ import { withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { STORAGE_PROVIDER, StorageProvider } from '../storage/storage-provider.interface';
+import { QuotaService } from '../subscription/quota.service';
 import { ListFilesQuery } from './dto/list-files.query';
 import {
   FileInUseException,
@@ -54,6 +55,7 @@ export class FilesService {
     @Inject(APP_POOL) private readonly pool: Pool,
     @Inject(STORAGE_PROVIDER) private readonly storage: StorageProvider,
     private readonly auditService: AuditService,
+    private readonly quota: QuotaService,
   ) {}
 
   private restrictsToOwner(dataScope: string): boolean {
@@ -121,6 +123,9 @@ export class FilesService {
       after: toFileResponse(row),
     });
 
+    void this.quota.addStorage(actor.tenantId, actor.userId, input.buffer.length).catch(() =>
+      this.logger.warn('quota addStorage failed for file.upload'),
+    );
     return toFileResponse(row);
   }
 
@@ -362,6 +367,10 @@ export class FilesService {
       before: toFileResponse(before),
       after: { ...toFileResponse(after), deleted: true },
     });
+
+    void this.quota.subtractStorage(actor.tenantId, actor.userId, Number(before.size_bytes)).catch(() =>
+      this.logger.warn('quota subtractStorage failed for file.remove'),
+    );
   }
 
   private async safeAudit(params: {

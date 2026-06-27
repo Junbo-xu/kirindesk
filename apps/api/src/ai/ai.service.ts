@@ -5,6 +5,7 @@ import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { OCR_PROVIDER, OcrProvider } from './ocr-provider.interface';
 import { AI_PROVIDER, AiProvider } from './ai-provider.interface';
+import { QuotaService } from '../subscription/quota.service';
 import { FileNotInScopeException } from './ai.errors';
 import { InvocationRow, InvocationSummary, toInvocationSummary } from './ai-invocation.response';
 
@@ -71,6 +72,7 @@ export class AiService {
     @Inject(OCR_PROVIDER) private readonly ocr: OcrProvider,
     @Inject(AI_PROVIDER) private readonly ai: AiProvider,
     private readonly auditService: AuditService,
+    private readonly quota: QuotaService,
   ) {}
 
   private restrictsToOwner(dataScope: string): boolean {
@@ -165,6 +167,9 @@ export class AiService {
       throw providerError;
     }
     // result is defined when there is no providerError.
+    void this.quota.incrementAi(actor.tenantId, actor.userId).catch(() =>
+      this.logger.warn('quota incrementAi failed for ocr.extract'),
+    );
     const ok = result as NonNullable<typeof result>;
     return {
       invocation: toInvocationSummary(row),
@@ -227,6 +232,9 @@ export class AiService {
     if (providerError) {
       throw providerError;
     }
+    void this.quota.incrementAi(actor.tenantId, actor.userId).catch(() =>
+      this.logger.warn('quota incrementAi failed for ai.complete'),
+    );
     const ok = result as NonNullable<typeof result>;
     return { invocation: toInvocationSummary(row), output: ok.output };
   }

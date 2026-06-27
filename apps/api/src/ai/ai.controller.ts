@@ -15,6 +15,9 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AiService, RequestActor } from './ai.service';
+import { QuotaGuard } from '../subscription/quota.guard';
+import { CheckQuota } from '../subscription/quota.service';
+import { ModuleGuard, RequireModule } from '../subscription/module.guard';
 import { OcrExtractRequestDto } from './dto/ocr-extract-request.dto';
 import { AiCompleteRequestDto } from './dto/ai-complete-request.dto';
 import { ListInvocationsQuery } from './dto/list-invocations.query';
@@ -31,7 +34,8 @@ interface TenantJwtUser {
  * (plan §7.5).
  */
 @Controller('api/ai')
-@UseGuards(TenantAuthGuard, PermissionGuard)
+@UseGuards(TenantAuthGuard, PermissionGuard, ModuleGuard)
+@RequireModule('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
 
@@ -46,6 +50,8 @@ export class AiController {
   // ---- OCR ----
 
   @Post('ocr')
+  @UseGuards(QuotaGuard)
+  @CheckQuota('ai')
   @RequirePermission('ocr', 'process')
   async ocrExtract(
     @CurrentUser() user: TenantJwtUser,
@@ -83,6 +89,8 @@ export class AiController {
   // ---- AI completion ----
 
   @Post('complete')
+  @UseGuards(QuotaGuard)
+  @CheckQuota('ai')
   @RequirePermission('ai', 'process')
   async aiComplete(
     @CurrentUser() user: TenantJwtUser,

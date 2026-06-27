@@ -325,6 +325,36 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
         ZERO_HASH,
       ],
     );
+
+    // --- tenant_quota_usage (required by QuotaGuard; one row per tenant) ---
+    await client.query(
+      `INSERT INTO tenant_quota_usage (tenant_id, user_count, storage_bytes, ai_calls_month, ai_calls_reset_at, updated_at)
+       VALUES
+         ($1, 1, 0, 0, date_trunc('month', now()), now()),
+         ($2, 1, 0, 0, date_trunc('month', now()), now())`,
+      [TEST_TENANT_ID, TEST_TENANT2_ID],
+    );
+
+    // --- tenant_modules: all modules enabled for both tenants (required by ModuleGuard) ---
+    for (const tenantId of [TEST_TENANT_ID, TEST_TENANT2_ID]) {
+      for (const moduleId of [
+        CRM_MODULE_ID,
+        ORDERS_MODULE_ID,
+        PROCUREMENT_MODULE_ID,
+        FILES_MODULE_ID,
+        SYSTEM_MODULE_ID,
+        FINANCE_MODULE_ID,
+        AI_MODULE_ID,
+        REPORTS_MODULE_ID,
+      ]) {
+        await client.query(
+          `INSERT INTO tenant_modules (tenant_id, module_id, enabled)
+           VALUES ($1, $2, true)
+           ON CONFLICT (tenant_id, module_id) DO NOTHING`,
+          [tenantId, moduleId],
+        );
+      }
+    }
   } finally {
     await client.end();
   }

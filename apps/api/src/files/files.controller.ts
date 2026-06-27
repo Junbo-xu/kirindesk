@@ -20,6 +20,8 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { FilesService, RequestActor } from './files.service';
+import { QuotaGuard } from '../subscription/quota.guard';
+import { CheckQuota } from '../subscription/quota.service';
 import { ListFilesQuery } from './dto/list-files.query';
 import { UploadFileDto } from './dto/upload-file.dto';
 import { ALLOWED_MIME_TYPES, MAX_FILE_BYTES } from './files.constants';
@@ -55,6 +57,8 @@ export class FilesController {
   }
 
   @Post()
+  @UseGuards(QuotaGuard)
+  @CheckQuota('storage')
   @RequirePermission('files', 'upload')
   @UseInterceptors(
     FileInterceptor('file', {
