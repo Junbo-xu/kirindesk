@@ -3,6 +3,7 @@ import {
   AuditChainVerifyResult,
   AuditLogDetail,
   AuditLogSummary,
+  CreateTenantInput,
   ListAuditLogsQuery,
   ListPlatformTenantsQuery,
   ListUsersQuery,
@@ -12,6 +13,7 @@ import {
   PlatformLoginResponse,
   PlatformTenantSummary,
   RoleSummary,
+  TenantOnboardingResult,
   UserSummary,
 } from './types';
 
@@ -162,6 +164,14 @@ export const platformClient = {
     return platformRequest<PlatformTenantSummary>(`/api/platform/tenants/${id}/activate`, {
       method: 'POST',
       body: reason ? { reason } : {},
+    });
+  },
+  // Phase 1L: atomic tenant onboarding (plan §5.3). ownerPassword lives in
+  // memory only — never written to storage/URL; the response contains no hash.
+  provisionTenant(input: CreateTenantInput): Promise<TenantOnboardingResult> {
+    return platformRequest<TenantOnboardingResult>('/api/platform/tenants', {
+      method: 'POST',
+      body: input,
     });
   },
 

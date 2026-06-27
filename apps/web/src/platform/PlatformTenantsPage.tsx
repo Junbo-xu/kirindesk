@@ -1,6 +1,6 @@
 import { CSSProperties, useCallback, useEffect, useState } from 'react';
 import { platformClient } from '../lib/platform-client';
-import { ApiError, PlatformTenantSummary, TenantStatus } from '../lib/types';
+import { ApiError, CreateTenantInput, PlatformTenantSummary, TenantStatus } from '../lib/types';
 
 // Platform-side tenant lifecycle console (plan §5.3, over the 1K-A endpoints).
 // Metadata only — never tenant business data. The three persisted statuses map
@@ -59,6 +59,8 @@ export function PlatformTenantsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [showProvision, setShowProvision] = useState(false);
+  const [provisionSuccess, setProvisionSuccess] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -125,7 +127,33 @@ export function PlatformTenantsPage() {
         <button onClick={() => load()} disabled={loading} style={{ cursor: 'pointer' }}>
           刷新
         </button>
+        <button
+          onClick={() => {
+            setShowProvision((v) => !v);
+            setProvisionSuccess(null);
+          }}
+          style={{ cursor: 'pointer', marginLeft: 'auto' }}
+        >
+          {showProvision ? '收起' : '开通租户'}
+        </button>
       </div>
+
+      {showProvision && (
+        <ProvisionPanel
+          onDone={(name, slug) => {
+            setShowProvision(false);
+            setProvisionSuccess(`已开通：${name}（${slug}）`);
+            setPage(1);
+            load();
+          }}
+        />
+      )}
+
+      {provisionSuccess && (
+        <p style={{ color: '#0a7d23', background: '#f0faf2', padding: '8px 12px', borderRadius: 4 }}>
+          {provisionSuccess}
+        </p>
+      )}
 
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
@@ -214,6 +242,179 @@ export function PlatformTenantsPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+// Inline provision form (plan §5.4). ownerPassword lives only in React state;
+// cleared immediately on success or unmount. Never written to storage/URL.
+function ProvisionPanel({ onDone }: { onDone: (name: string, slug: string) => void }) {
+  const [form, setForm] = useState<CreateTenantInput>({
+    name: '',
+    slug: '',
+    ownerEmail: '',
+    ownerPassword: '',
+    ownerName: '',
+    contactEmail: '',
+    contactPhone: '',
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const set = (k: keyof CreateTenantInput, v: string) =>
+    setForm((f) => ({ ...f, [k]: v }));
+
+  const submit = () => {
+    setSubmitting(true);
+    setError(null);
+    const input: CreateTenantInput = {
+      name: form.name,
+      slug: form.slug,
+      ownerEmail: form.ownerEmail,
+      ownerPassword: form.ownerPassword,
+      ownerName: form.ownerName,
+      ...(form.contactEmail ? { contactEmail: form.contactEmail } : {}),
+      ...(form.contactPhone ? { contactPhone: form.contactPhone } : {}),
+    };
+    platformClient
+      .provisionTenant(input)
+      .then((res) => {
+        // Clear password from state immediately after success (plan §5.4)
+        setForm((f) => ({ ...f, ownerPassword: '' }));
+        onDone(res.tenant.name, res.tenant.slug);
+      })
+      .catch((err) => {
+        setForm((f) => ({ ...f, ownerPassword: '' }));
+        if (err instanceof ApiError) {
+          if (err.status === 409 && err.message.includes('slug')) {
+            setError('该标识已被占用，请换一个');
+          } else if (err.status === 409 && err.message.includes('邮箱')) {
+            setError('Owner 邮箱已存在');
+          } else if (err.status === 409) {
+            setError(err.message);
+          } else if (err.status === 400) {
+            setError(err.message || '请检查输入字段');
+          } else {
+            setError('开通失败，请稍后重试');
+          }
+        } else {
+          setError('开通失败，请稍后重试');
+        }
+        setSubmitting(false);
+      });
+  };
+
+  const panel: CSSProperties = {
+    border: '1px solid #c8d8e8',
+    borderRadius: 6,
+    padding: 16,
+    marginBottom: 16,
+    background: '#f7fafd',
+  };
+  const row: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '8px 16px',
+    marginBottom: 8,
+  };
+  const field: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 3 };
+  const lbl: CSSProperties = { fontSize: 12, color: '#555' };
+  const inp: CSSProperties = { padding: '4px 6px', fontSize: 14 };
+
+  return (
+    <div style={panel}>
+      <h3 style={{ margin: '0 0 12px', fontSize: 15 }}>开通新租户</h3>
+      <div style={row}>
+        <div style={field}>
+          <label style={lbl}>租户名称 *</label>
+          <input
+            style={inp}
+            value={form.name}
+            onChange={(e) => set('name', e.target.value)}
+            maxLength={200}
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>租户标识 slug *（小写字母/数字/连字符）</label>
+          <input
+            style={inp}
+            value={form.slug}
+            onChange={(e) => set('slug', e.target.value)}
+            maxLength={100}
+            placeholder="my-tenant"
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>Owner 邮箱 *</label>
+          <input
+            style={inp}
+            type="email"
+            value={form.ownerEmail}
+            onChange={(e) => set('ownerEmail', e.target.value)}
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>Owner 初始密码 *（至少 8 位）</label>
+          <input
+            style={inp}
+            type="password"
+            autoComplete="new-password"
+            value={form.ownerPassword}
+            onChange={(e) => set('ownerPassword', e.target.value)}
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>Owner 姓名 *</label>
+          <input
+            style={inp}
+            value={form.ownerName}
+            onChange={(e) => set('ownerName', e.target.value)}
+            maxLength={100}
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>联系邮箱（可选）</label>
+          <input
+            style={inp}
+            type="email"
+            value={form.contactEmail}
+            onChange={(e) => set('contactEmail', e.target.value)}
+            disabled={submitting}
+          />
+        </div>
+        <div style={field}>
+          <label style={lbl}>联系电话（可选）</label>
+          <input
+            style={inp}
+            value={form.contactPhone}
+            onChange={(e) => set('contactPhone', e.target.value)}
+            maxLength={50}
+            disabled={submitting}
+          />
+        </div>
+      </div>
+      {error && <p style={{ color: 'crimson', fontSize: 13, margin: '6px 0' }}>{error}</p>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button
+          onClick={submit}
+          disabled={
+            submitting ||
+            !form.name.trim() ||
+            !form.slug.trim() ||
+            !form.ownerEmail.trim() ||
+            form.ownerPassword.length < 8 ||
+            !form.ownerName.trim()
+          }
+          style={{ cursor: 'pointer' }}
+        >
+          {submitting ? '开通中…' : '确认开通'}
+        </button>
+      </div>
     </div>
   );
 }

@@ -800,6 +800,32 @@ export interface ListPlatformTenantsQuery {
   status?: TenantStatus;
 }
 
+// Phase 1L tenant onboarding (plan §5.2).
+export interface CreateTenantInput {
+  name: string;
+  slug: string;
+  ownerEmail: string;
+  ownerPassword: string; // only lives in memory; never written to storage/URL
+  ownerName: string;
+  contactEmail?: string;
+  contactPhone?: string;
+  timezone?: string;
+  locale?: string;
+}
+
+export interface TenantOnboardingResult {
+  tenant: PlatformTenantSummary;
+  owner: {
+    id: string;
+    tenantId: string;
+    email: string;
+    name: string;
+    status: string;
+    isOwner: boolean;
+    createdAt: string;
+  };
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;
