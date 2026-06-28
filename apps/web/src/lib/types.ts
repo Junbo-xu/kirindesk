@@ -879,6 +879,29 @@ export interface NotificationSettings {
   supportAccess: boolean;
 }
 
+// Phase 2A billing — invoice summary mirrors the backend InvoiceSummary shape.
+// amount is the numeric(…,2) decimal string derived from amountCents (integer
+// cents); the frontend displays amount and never recomputes money.
+export interface InvoiceSummary {
+  id: string;
+  planId: string;
+  billingPeriod: string;
+  amount: string;
+  amountCents: string;
+  currency: string;
+  status: 'pending' | 'paid' | 'void' | string;
+  issuedAt: string;
+  dueAt: string | null;
+  paidAt: string | null;
+  voidReason: string | null;
+}
+
+export interface ListInvoicesQuery {
+  status?: 'pending' | 'paid' | 'void';
+  page?: number;
+  pageSize?: number;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

@@ -27,6 +27,8 @@ import {
   ListAuditLogsQuery,
   ListPayoutsQuery,
   ListInvocationsQuery,
+  ListInvoicesQuery,
+  InvoiceSummary,
   LoginResponse,
   MeResponse,
   NotificationSettings,
@@ -668,6 +670,23 @@ export const apiClient = {
       method: 'PUT',
       body,
     });
+  },
+
+  // Phase 2A billing — tenant-side invoice list + detail + pay. Amount/currency
+  // are server-derived; the client only lists, reads, and triggers payment.
+  listInvoices(query: ListInvoicesQuery = {}): Promise<Paginated<InvoiceSummary>> {
+    const params = new URLSearchParams();
+    if (query.status) params.set('status', query.status);
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<InvoiceSummary>>(`/api/billing/invoices${qs ? `?${qs}` : ''}`);
+  },
+  getInvoice(id: string): Promise<InvoiceSummary> {
+    return request<InvoiceSummary>(`/api/billing/invoices/${id}`);
+  },
+  payInvoice(id: string): Promise<InvoiceSummary> {
+    return request<InvoiceSummary>(`/api/billing/invoices/${id}/pay`, { method: 'POST' });
   },
 };
 
