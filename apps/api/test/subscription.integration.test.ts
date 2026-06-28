@@ -95,6 +95,7 @@ describe('Subscription & Quota API (integration)', () => {
         for (const id of ids) {
           await c.query(`DELETE FROM tenant_modules WHERE tenant_id = $1`, [id]);
           await c.query(`DELETE FROM tenant_quota_usage WHERE tenant_id = $1`, [id]);
+          await c.query(`DELETE FROM tenant_notification_settings WHERE tenant_id = $1`, [id]);
           await c.query(
             `DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE tenant_id = $1)`,
             [id],

@@ -93,6 +93,7 @@ describe('Tenant Onboarding API (integration)', () => {
         await c.query(`DELETE FROM users WHERE tenant_id = $1`, [id]);
         await c.query(`DELETE FROM audit_log_chains WHERE tenant_id = $1`, [id]);
         await c.query(`DELETE FROM tenant_quota_usage WHERE tenant_id = $1`, [id]);
+        await c.query(`DELETE FROM tenant_notification_settings WHERE tenant_id = $1`, [id]);
         await c.query(`DELETE FROM tenants WHERE id = $1`, [id]);
       }
     });

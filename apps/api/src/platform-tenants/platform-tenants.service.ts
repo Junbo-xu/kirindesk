@@ -2,6 +2,7 @@ import { ConflictException, Inject, Injectable, NotFoundException } from '@nestj
 import type { Pool } from 'pg';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
+import { NotificationService } from '../notification/notification.service';
 import { ListTenantsQuery, TenantStatus } from './dto/list-tenants.query';
 
 export interface TenantRow {
@@ -71,6 +72,7 @@ export class PlatformTenantsService {
   constructor(
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
+    private readonly notification: NotificationService,
   ) {}
 
   async list(query: ListTenantsQuery): Promise<ListResult> {
@@ -173,6 +175,11 @@ export class PlatformTenantsService {
         metadata: { fromStatus, toStatus: spec.to },
       });
 
+      // Notify tenant owner on suspend (best-effort).
+      if (action === 'suspend') {
+        void this._notifyOwner(id, rows[0].name, reason).catch(() => {});
+      }
+
       return toTenantSummary(rows[0]);
     } catch (e) {
       // ROLLBACK already issued on the handled throws above; guard the rest.
@@ -180,6 +187,33 @@ export class PlatformTenantsService {
         await client.query('ROLLBACK').catch(() => {});
       }
       throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async _notifyOwner(
+    tenantId: string,
+    tenantName: string,
+    reason: string | null,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      const { rows } = await client.query<{ email: string }>(
+        `SELECT u.email FROM users u
+           JOIN tenants t ON t.owner_user_id = u.id
+          WHERE t.id = $1 AND u.deleted_at IS NULL LIMIT 1`,
+        [tenantId],
+      );
+      if (rows.length === 0) return;
+      await this.notification.send(
+        tenantId,
+        tenantId,
+        'support_access',
+        rows[0].email,
+        '您的租户已被暂停',
+        `租户 ${tenantName} 已被平台暂停。${reason ? `原因：${reason}` : ''}`,
+      );
     } finally {
       client.release();
     }

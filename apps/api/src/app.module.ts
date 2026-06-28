@@ -22,6 +22,7 @@ import { PlatformTenantsModule } from './platform-tenants/platform-tenants.modul
 import { TenantLifecycleModule } from './tenant-lifecycle/tenant-lifecycle.module';
 import { SupportAccessModule } from './support-access/support-access.module';
 import { SubscriptionModule } from './subscription/subscription.module';
+import { NotificationModule } from './notification/notification.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { SubscriptionModule } from './subscription/subscription.module';
     TenantLifecycleModule,
     SupportAccessModule,
     SubscriptionModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

@@ -6,6 +6,7 @@ import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
 import { RbacService, scopeWithin } from '../rbac/rbac.service';
 import { QuotaService } from '../subscription/quota.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ListUsersQuery } from './dto/list-users.query';
@@ -61,6 +62,7 @@ export class UsersService {
     private readonly auditService: AuditService,
     private readonly rbacService: RbacService,
     private readonly quota: QuotaService,
+    private readonly notification: NotificationService,
   ) {}
 
   // --- auth-facing reads (existing; unchanged signatures) ---
@@ -147,6 +149,16 @@ export class UsersService {
     void this.quota
       .increment(actor.tenantId, actor.userId)
       .catch(() => this.logger.warn('quota increment failed for user.create'));
+    void this.notification
+      .send(
+        actor.tenantId,
+        actor.userId,
+        'user_welcome',
+        row.email,
+        '欢迎加入',
+        `您已被添加到系统，欢迎使用 KirinDesk。`,
+      )
+      .catch(() => {});
     return toUserDetail(row, roles);
   }
 

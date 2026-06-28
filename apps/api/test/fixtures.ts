@@ -357,6 +357,14 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       [TEST_TENANT_ID, TEST_TENANT2_ID],
     );
 
+    // --- tenant_notification_settings (required by NotificationService) ---
+    await client.query(
+      `INSERT INTO tenant_notification_settings (tenant_id, updated_at)
+       VALUES ($1, now()), ($2, now())
+       ON CONFLICT (tenant_id) DO NOTHING`,
+      [TEST_TENANT_ID, TEST_TENANT2_ID],
+    );
+
     // --- tenant_modules: all modules enabled for both tenants (required by ModuleGuard) ---
     // Look up IDs by code at runtime — migration seeds may use different UUIDs than
     // the fixture constants, so hardcoding them causes FK mismatches.

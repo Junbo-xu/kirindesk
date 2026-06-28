@@ -29,6 +29,7 @@ import {
   ListInvocationsQuery,
   LoginResponse,
   MeResponse,
+  NotificationSettings,
   OcrExtractRequestBody,
   OcrExtractResponse,
   AiCompleteRequestBody,
@@ -654,6 +655,19 @@ export const apiClient = {
   // Phase 1M subscription
   getSubscription(): Promise<SubscriptionDetail> {
     return request<SubscriptionDetail>('/api/subscription');
+  },
+
+  // Phase 1N notification settings
+  getNotificationSettings(): Promise<NotificationSettings> {
+    return request<NotificationSettings>('/api/notifications/settings');
+  },
+  updateNotificationSettings(
+    body: Partial<{ orderEvents: boolean; userWelcome: boolean; supportAccess: boolean }>,
+  ): Promise<NotificationSettings> {
+    return request<NotificationSettings>('/api/notifications/settings', {
+      method: 'PUT',
+      body,
+    });
   },
 };
 

@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import { withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateSupportAccessDto } from './dto/create-support-access.dto';
 import { ListSupportAccessQuery } from './dto/list-support-access.query';
 import {
@@ -52,6 +53,7 @@ export class SupportAccessService {
   constructor(
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
+    private readonly notification: NotificationService,
   ) {}
 
   async create(
@@ -130,8 +132,47 @@ export class SupportAccessService {
       metadata: { platformAdminId, scope: dto.scope, expiresAt: expiresAt.toISOString() },
     });
 
+    // Notify tenant owner that a support admin has been granted access (best-effort).
+    void this._notifyOwnerOfGrant(
+      actor.tenantId,
+      actor.userId,
+      dto.platformAdminEmail,
+      expiresAt.toISOString(),
+    ).catch(() => {});
+
     // Backfill the joined email for the response (RETURNING used NULL above).
     return toSupportAccessGrantSummary({ ...row, platform_admin_email: dto.platformAdminEmail });
+  }
+
+  private async _notifyOwnerOfGrant(
+    tenantId: string,
+    actorId: string,
+    adminEmail: string,
+    expiresAt: string,
+  ): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
+      await client.query(`SELECT set_config('app.current_actor_type', 'tenant_user', true)`);
+      const { rows } = await client.query<{ email: string }>(
+        `SELECT email FROM users WHERE is_tenant_owner = true AND deleted_at IS NULL LIMIT 1`,
+      );
+      await client.query('COMMIT');
+      if (rows.length === 0) return;
+      await this.notification.send(
+        tenantId,
+        actorId,
+        'support_access',
+        rows[0].email,
+        '平台支持访问已授权',
+        `您已授权 ${adminEmail} 对租户进行只读访问，有效期至 ${new Date(expiresAt).toLocaleString('zh-CN')}。`,
+      );
+    } catch {
+      await client.query('ROLLBACK').catch(() => {});
+    } finally {
+      client.release();
+    }
   }
 
   async list(actor: RequestActor, query: ListSupportAccessQuery): Promise<ListResult> {

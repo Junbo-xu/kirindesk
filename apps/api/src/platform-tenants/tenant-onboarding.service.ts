@@ -8,6 +8,7 @@ import * as bcrypt from 'bcryptjs';
 import type { Pool } from 'pg';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateTenantDto } from './dto/create-tenant.dto';
 import { TenantSummary, toTenantSummary, TenantRow } from './platform-tenants.service';
 
@@ -54,6 +55,7 @@ export class TenantOnboardingService {
   constructor(
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
+    private readonly notification: NotificationService,
   ) {}
 
   async provision(adminId: string, dto: CreateTenantDto): Promise<TenantOnboardingResult> {
@@ -154,6 +156,9 @@ export class TenantOnboardingService {
          VALUES ($1, 1, 0, 0, date_trunc('month', now()), now())`,
         [tenantId],
       );
+
+      // ⑧ notification_settings genesis row (Phase 1N).
+      await this.notification.insertInitialRow(client, tenantId);
 
       await client.query('COMMIT');
 

@@ -871,6 +871,14 @@ export interface TenantOnboardingResult {
   };
 }
 
+// Phase 1N notification settings (plan §4.1).
+export interface NotificationSettings {
+  tenantId: string;
+  orderEvents: boolean;
+  userWelcome: boolean;
+  supportAccess: boolean;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

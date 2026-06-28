@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import { withTenantContext } from '../database/context';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateSalesOrderDto } from './dto/create-sales-order.dto';
 import { UpdateSalesOrderDto } from './dto/update-sales-order.dto';
 import { ListSalesOrdersQuery } from './dto/list-sales-orders.query';
@@ -59,6 +60,7 @@ export class SalesOrdersService {
   constructor(
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
+    private readonly notification: NotificationService,
   ) {}
 
   // own and assigned both restrict to the caller's owned rows. assigned has no
@@ -638,7 +640,65 @@ export class SalesOrdersService {
       reason: reason ?? null,
     });
 
+    if (action === 'approve' || action === 'reject') {
+      void this._notifyApproval(actor.tenantId, actor.userId, id, action, reason).catch(() => {});
+    }
+
     return afterResponse;
+  }
+
+  private async _notifyApproval(
+    tenantId: string,
+    actorId: string,
+    orderId: string,
+    action: 'approve' | 'reject',
+    reason?: string,
+  ): Promise<void> {
+    const submitterId = await this._findSubmitterId(tenantId, orderId);
+    if (!submitterId) return;
+    const email = await this._userEmail(tenantId, submitterId);
+    if (!email) return;
+    const verb = action === 'approve' ? '已批准' : '已驳回';
+    await this.notification.send(
+      tenantId,
+      actorId,
+      'order_events',
+      email,
+      `销售订单${verb}`,
+      `您的销售订单 ${orderId} ${verb}。${reason ? `原因：${reason}` : ''}`,
+    );
+  }
+
+  private async _findSubmitterId(tenantId: string, orderId: string): Promise<string | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
+      await client.query(`SELECT set_config('app.current_actor_type', 'tenant_user', true)`);
+      const { rows } = await client.query<{ actor_user_id: string }>(
+        `SELECT actor_user_id FROM order_approvals
+          WHERE order_type = 'sales' AND order_id = $1 AND action = 'submit'
+          ORDER BY created_at DESC LIMIT 1`,
+        [orderId],
+      );
+      return rows[0]?.actor_user_id ?? null;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async _userEmail(tenantId: string, userId: string): Promise<string | null> {
+    const client = await this.pool.connect();
+    try {
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
+      await client.query(`SELECT set_config('app.current_actor_type', 'tenant_user', true)`);
+      const { rows } = await client.query<{ email: string }>(
+        `SELECT email FROM users WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+        [userId],
+      );
+      return rows[0]?.email ?? null;
+    } finally {
+      client.release();
+    }
   }
 
   // Maps a transition action to its audit verb (sales_order.<verb>): submit ->
