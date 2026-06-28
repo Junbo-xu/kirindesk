@@ -1,14 +1,16 @@
 import { FormEvent, useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from './AuthContext';
 import { ApiError } from '../lib/types';
 
 export function LoginPage() {
   const { status, login } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [tenantSlug, setTenantSlug] = useState('');
+  // Prefilled from ?tenantSlug=… (e.g. right after self-service signup).
+  const [tenantSlug, setTenantSlug] = useState(searchParams.get('tenantSlug') ?? '');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -23,9 +25,7 @@ export function LoginPage() {
       navigate('/', { replace: true });
     } catch (err) {
       const status = err instanceof ApiError ? err.status : 0;
-      setError(
-        status === 400 || status === 401 ? '邮箱、密码或租户错误' : '登录失败，请稍后重试',
-      );
+      setError(status === 400 || status === 401 ? '邮箱、密码或租户错误' : '登录失败，请稍后重试');
     } finally {
       setSubmitting(false);
     }
@@ -69,6 +69,9 @@ export function LoginPage() {
           {submitting ? '登录中…' : '登录'}
         </button>
       </form>
+      <p style={{ marginTop: 16, fontSize: 13 }}>
+        还没有账号？<Link to="/signup">注册新租户</Link>
+      </p>
     </div>
   );
 }

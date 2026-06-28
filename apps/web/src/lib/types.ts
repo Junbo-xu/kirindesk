@@ -902,6 +902,35 @@ export interface ListInvoicesQuery {
   pageSize?: number;
 }
 
+// Phase 2B: tenant self-service registration (POST /api/auth/signup).
+// ownerPassword only ever lives in component state — never written to
+// storage, URL, or logged.
+export interface SignupInput {
+  tenantName: string;
+  slug: string;
+  ownerEmail: string;
+  ownerPassword: string;
+  ownerName: string;
+  contactPhone?: string;
+}
+
+// Mirrors the backend TenantOnboardingResult (tenant + owner summary). No
+// password / password_hash fields are returned.
+export interface SignupResult {
+  tenant: {
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+  };
+  owner: {
+    id: string;
+    email: string;
+    name: string;
+    isOwner: boolean;
+  };
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

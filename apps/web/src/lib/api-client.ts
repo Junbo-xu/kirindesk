@@ -66,6 +66,8 @@ import {
   SupportGrant,
   CreateSupportGrantInput,
   ListSupportGrantsQuery,
+  SignupInput,
+  SignupResult,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -192,6 +194,14 @@ export const apiClient = {
     return request<LoginResponse>('/api/auth/login', {
       method: 'POST',
       body: { email, password, tenantSlug },
+      auth: false,
+    });
+  },
+  // Phase 2B: anonymous self-service registration. Public endpoint — no token.
+  signup(input: SignupInput): Promise<SignupResult> {
+    return request<SignupResult>('/api/auth/signup', {
+      method: 'POST',
+      body: input,
       auth: false,
     });
   },
