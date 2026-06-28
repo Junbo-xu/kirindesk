@@ -32,6 +32,7 @@ import { AuditLogsPage } from './audit/AuditLogsPage';
 import { SupportAccessPage } from './support-access/SupportAccessPage';
 import { SubscriptionPage } from './subscription/SubscriptionPage';
 import { NotificationSettingsPage } from './notification/NotificationSettingsPage';
+import { BillingPage } from './billing/BillingPage';
 import { PlatformAuthProvider } from './platform/PlatformAuthContext';
 import { PlatformProtectedRoute } from './platform/PlatformProtectedRoute';
 import { PlatformLayout } from './platform/PlatformLayout';
@@ -91,6 +92,7 @@ export function App() {
               <Route path="/audit-logs" element={<AuditLogsPage />} />
               <Route path="/support-access" element={<SupportAccessPage />} />
               <Route path="/subscription" element={<SubscriptionPage />} />
+              <Route path="/billing" element={<BillingPage />} />
               <Route path="/notification-settings" element={<NotificationSettingsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
