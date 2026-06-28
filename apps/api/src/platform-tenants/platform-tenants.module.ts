@@ -9,5 +9,6 @@ import { TenantOnboardingService } from './tenant-onboarding.service';
   imports: [PlatformAuthModule, AuditModule],
   controllers: [PlatformTenantsController],
   providers: [PlatformTenantsService, TenantOnboardingService],
+  exports: [TenantOnboardingService],
 })
 export class PlatformTenantsModule {}

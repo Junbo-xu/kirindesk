@@ -30,6 +30,28 @@ export interface TenantOnboardingResult {
   owner: OwnerSummary;
 }
 
+/**
+ * Optional provisioning overrides. The platform path (POST /api/platform/tenants)
+ * passes nothing and keeps the original behaviour (plan_id NULL → standard
+ * fallback, created_via='platform', audited as the platform admin). The
+ * self-signup path (Phase 2B) passes planId=free, createdVia='self_signup',
+ * and audits as the new tenant owner.
+ */
+export interface ProvisionOptions {
+  /** Bind this plan at creation time (NULL = leave unset). */
+  planId?: string | null;
+  /** Provenance marker for the tenants.created_via column. */
+  createdVia?: 'platform' | 'self_signup';
+  /** Audit actor type for the tenant.created event. Default 'platform_admin'. */
+  auditActorType?: 'platform_admin' | 'tenant_user';
+  /**
+   * When true, the tenant.created audit event is attributed to the newly
+   * created owner user (self-signup: the actor IS the owner, known only after
+   * the INSERT). When false/omitted, the passed adminId is used.
+   */
+  auditAsOwner?: boolean;
+}
+
 interface UserRow {
   id: string;
   tenant_id: string;
@@ -58,7 +80,11 @@ export class TenantOnboardingService {
     private readonly notification: NotificationService,
   ) {}
 
-  async provision(adminId: string, dto: CreateTenantDto): Promise<TenantOnboardingResult> {
+  async provision(
+    adminId: string,
+    dto: CreateTenantDto,
+    opts: ProvisionOptions = {},
+  ): Promise<TenantOnboardingResult> {
     // ① bcrypt outside the transaction — CPU-intensive, must not hold a
     //    connection while hashing (same pattern as 1H UsersService.create).
     const passwordHash = await bcrypt.hash(dto.ownerPassword, BCRYPT_COST);
@@ -74,8 +100,10 @@ export class TenantOnboardingService {
       try {
         const res = await client.query<TenantRow>(
           `INSERT INTO tenants
-              (name, slug, status, contact_email, contact_phone, timezone, locale)
-           VALUES ($1, $2, 'active', $3, $4, $5, $6)
+              (name, slug, status, contact_email, contact_phone, timezone, locale,
+               plan_id, plan_assigned_at, created_via)
+           VALUES ($1, $2, 'active', $3, $4, $5, $6,
+               $7, CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() END, $8)
            RETURNING ${META_COLS}`,
           [
             dto.name,
@@ -84,6 +112,8 @@ export class TenantOnboardingService {
             dto.contactPhone ?? null,
             dto.timezone ?? 'Asia/Shanghai',
             dto.locale ?? 'zh-CN',
+            opts.planId ?? null,
+            opts.createdVia ?? 'platform',
           ],
         );
         tenantRow = res.rows[0];
@@ -188,8 +218,8 @@ export class TenantOnboardingService {
     //   trade-off as 1K-A transition(). Metadata must NOT contain any password.
     await this.auditService.log({
       tenantId: tenant.id,
-      actorType: 'platform_admin',
-      actorId: adminId,
+      actorType: opts.auditActorType ?? 'platform_admin',
+      actorId: opts.auditAsOwner ? owner.id : adminId,
       action: 'tenant.created',
       resourceType: 'tenant',
       resourceId: tenant.id,
@@ -197,6 +227,7 @@ export class TenantOnboardingService {
         tenantSlug: tenant.slug,
         ownerEmail: owner.email,
         ownerUserId: owner.id,
+        createdVia: opts.createdVia ?? 'platform',
       },
     });
 
