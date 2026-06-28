@@ -1,6 +1,7 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { SignupService } from './signup.service';
 import { SignupDto } from './dto/signup.dto';
+import { SignupRateLimitGuard } from './signup-rate-limit.guard';
 
 /**
  * Phase 2B: public, unauthenticated tenant self-service registration.
@@ -11,6 +12,7 @@ import { SignupDto } from './dto/signup.dto';
  * sub-step; this skeleton intentionally has none yet.
  */
 @Controller('api/auth/signup')
+@UseGuards(SignupRateLimitGuard)
 export class SignupController {
   constructor(private readonly signup: SignupService) {}
 
