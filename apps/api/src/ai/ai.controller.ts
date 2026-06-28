@@ -34,7 +34,7 @@ interface TenantJwtUser {
  * (plan §7.5).
  */
 @Controller('api/ai')
-@UseGuards(TenantAuthGuard, PermissionGuard, ModuleGuard)
+@UseGuards(TenantAuthGuard, PermissionGuard, ModuleGuard, QuotaGuard)
 @RequireModule('ai')
 export class AiController {
   constructor(private readonly aiService: AiService) {}
@@ -50,7 +50,6 @@ export class AiController {
   // ---- OCR ----
 
   @Post('ocr')
-  @UseGuards(QuotaGuard)
   @CheckQuota('ai')
   @RequirePermission('ocr', 'process')
   async ocrExtract(

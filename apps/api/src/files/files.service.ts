@@ -123,9 +123,9 @@ export class FilesService {
       after: toFileResponse(row),
     });
 
-    void this.quota.addStorage(actor.tenantId, actor.userId, input.buffer.length).catch(() =>
-      this.logger.warn('quota addStorage failed for file.upload'),
-    );
+    void this.quota
+      .addStorage(actor.tenantId, actor.userId, input.buffer.length)
+      .catch(() => this.logger.warn('quota addStorage failed for file.upload'));
     return toFileResponse(row);
   }
 
@@ -368,9 +368,9 @@ export class FilesService {
       after: { ...toFileResponse(after), deleted: true },
     });
 
-    void this.quota.subtractStorage(actor.tenantId, actor.userId, Number(before.size_bytes)).catch(() =>
-      this.logger.warn('quota subtractStorage failed for file.remove'),
-    );
+    void this.quota
+      .subtractStorage(actor.tenantId, actor.userId, Number(before.size_bytes))
+      .catch(() => this.logger.warn('quota subtractStorage failed for file.remove'));
   }
 
   private async safeAudit(params: {

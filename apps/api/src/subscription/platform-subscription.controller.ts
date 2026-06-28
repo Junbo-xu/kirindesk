@@ -4,7 +4,10 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SubscriptionService } from './subscription.service';
 import { AssignPlanDto } from './dto/assign-plan.dto';
 
-interface PlatformJwtUser { sub: string; email: string }
+interface PlatformJwtUser {
+  sub: string;
+  email: string;
+}
 
 @Controller()
 @UseGuards(PlatformAuthGuard)

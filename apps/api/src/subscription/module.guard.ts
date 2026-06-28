@@ -1,4 +1,10 @@
-import { Injectable, CanActivate, ExecutionContext, ForbiddenException, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Inject,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { SetMetadata } from '@nestjs/common';
 import type { Pool } from 'pg';
@@ -27,6 +33,9 @@ export class ModuleGuard implements CanActivate {
 
     const client = await this.pool.connect();
     try {
+      // Wrap in a transaction so SET LOCAL persists across the two queries.
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
       const { rows } = await client.query<{ enabled: boolean }>(
         `SELECT tm.enabled
            FROM tenant_modules tm
@@ -34,9 +43,13 @@ export class ModuleGuard implements CanActivate {
           WHERE tm.tenant_id = $1 AND m.code = $2`,
         [tenantId, moduleCode],
       );
+      await client.query('COMMIT');
       if (rows.length === 0 || !rows[0].enabled) {
         throw new ForbiddenException({ code: 'MODULE_NOT_ENABLED', module: moduleCode });
       }
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
     } finally {
       client.release();
     }

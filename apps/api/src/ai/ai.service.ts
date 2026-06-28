@@ -167,9 +167,9 @@ export class AiService {
       throw providerError;
     }
     // result is defined when there is no providerError.
-    void this.quota.incrementAi(actor.tenantId, actor.userId).catch(() =>
-      this.logger.warn('quota incrementAi failed for ocr.extract'),
-    );
+    void this.quota
+      .incrementAi(actor.tenantId, actor.userId)
+      .catch(() => this.logger.warn('quota incrementAi failed for ocr.extract'));
     const ok = result as NonNullable<typeof result>;
     return {
       invocation: toInvocationSummary(row),
@@ -232,9 +232,9 @@ export class AiService {
     if (providerError) {
       throw providerError;
     }
-    void this.quota.incrementAi(actor.tenantId, actor.userId).catch(() =>
-      this.logger.warn('quota incrementAi failed for ai.complete'),
-    );
+    void this.quota
+      .incrementAi(actor.tenantId, actor.userId)
+      .catch(() => this.logger.warn('quota incrementAi failed for ai.complete'));
     const ok = result as NonNullable<typeof result>;
     return { invocation: toInvocationSummary(row), output: ok.output };
   }

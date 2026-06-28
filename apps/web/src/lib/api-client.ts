@@ -53,6 +53,7 @@ import {
   CreateUserInput,
   UpdateUserInput,
   ListUsersQuery,
+  SubscriptionDetail,
   RoleSummary,
   RoleDetail,
   CreateRoleInput,
@@ -648,6 +649,11 @@ export const apiClient = {
       method: 'POST',
       body: { reason },
     });
+  },
+
+  // Phase 1M subscription
+  getSubscription(): Promise<SubscriptionDetail> {
+    return request<SubscriptionDetail>('/api/subscription');
   },
 };
 

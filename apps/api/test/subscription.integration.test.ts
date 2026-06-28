@@ -21,8 +21,7 @@ import {
 // user/storage/ai limits, month-rollover AI reset, platform plan assignment,
 // ModuleGuard 403 MODULE_NOT_ENABLED, mobile alias, and RBAC.
 
-const FREE_PLAN_ID = 'b0000000-0000-0000-0000-000000000001';   // max_users=3, max_storage_gb=5, ai_quota_monthly=50
-const STANDARD_PLAN_ID = 'b0000000-0000-0000-0000-000000000002'; // max_users=10
+const FREE_PLAN_ID = 'b0000000-0000-0000-0000-000000000001'; // max_users=3, max_storage_gb=5, ai_quota_monthly=50
 
 describe('Subscription & Quota API (integration)', () => {
   let app: INestApplication;
@@ -42,15 +41,21 @@ describe('Subscription & Quota API (integration)', () => {
     }
   }
 
-  function bearer(t: string) { return { Authorization: `Bearer ${t}` }; }
+  function bearer(t: string) {
+    return { Authorization: `Bearer ${t}` };
+  }
 
   let seq = 0;
-  function slug() { return `qa-sub-${Date.now()}-${++seq}`; }
+  function slug() {
+    return `qa-sub-${Date.now()}-${++seq}`;
+  }
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+    );
     await app.init();
     pool = app.get<Pool>(APP_POOL);
 
@@ -90,7 +95,10 @@ describe('Subscription & Quota API (integration)', () => {
         for (const id of ids) {
           await c.query(`DELETE FROM tenant_modules WHERE tenant_id = $1`, [id]);
           await c.query(`DELETE FROM tenant_quota_usage WHERE tenant_id = $1`, [id]);
-          await c.query(`DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE tenant_id = $1)`, [id]);
+          await c.query(
+            `DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE tenant_id = $1)`,
+            [id],
+          );
           await c.query(`DELETE FROM users WHERE tenant_id = $1`, [id]);
           await c.query(`DELETE FROM audit_log_chains WHERE tenant_id = $1`, [id]);
           await c.query(`DELETE FROM tenants WHERE id = $1`, [id]);
@@ -100,7 +108,10 @@ describe('Subscription & Quota API (integration)', () => {
   });
 
   afterAll(async () => {
-    if (app) { await app.close(); await pool.end(); }
+    if (app) {
+      await app.close();
+      await pool.end();
+    }
     await closePool();
   });
 
@@ -111,7 +122,13 @@ describe('Subscription & Quota API (integration)', () => {
     const res = await request(app.getHttpServer())
       .post('/api/platform/tenants')
       .set(bearer(platformToken))
-      .send({ name: 'Quota Test Tenant', slug: s, ownerEmail: `owner-${s}@qa.local`, ownerPassword: 'TestPass123!', ownerName: 'QA' });
+      .send({
+        name: 'Quota Test Tenant',
+        slug: s,
+        ownerEmail: `owner-${s}@qa.local`,
+        ownerPassword: 'TestPass123!',
+        ownerName: 'QA',
+      });
     expect(res.status).toBe(201);
     const tenantId = res.body.tenant.id as string;
     createdTenantIds.push(tenantId);
@@ -131,9 +148,7 @@ describe('Subscription & Quota API (integration)', () => {
   // ── 2. GET /api/subscription ──────────────────────────────────────────────
 
   it('GET /api/subscription returns plan, usage, and modules', async () => {
-    const res = await request(app.getHttpServer())
-      .get('/api/subscription')
-      .set(bearer(adminToken));
+    const res = await request(app.getHttpServer()).get('/api/subscription').set(bearer(adminToken));
     expect(res.status).toBe(200);
     expect(res.body.plan).toBeDefined();
     expect(typeof res.body.plan.maxUsers).toBe('number');
@@ -148,9 +163,14 @@ describe('Subscription & Quota API (integration)', () => {
 
   it('POST /api/users returns 429 QUOTA_EXCEEDED when user count is at free plan limit', async () => {
     await withAdmin(async (c) => {
-      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [FREE_PLAN_ID, TEST_TENANT_ID]);
+      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [
+        FREE_PLAN_ID,
+        TEST_TENANT_ID,
+      ]);
       // free max_users=3; set user_count=3
-      await c.query(`UPDATE tenant_quota_usage SET user_count = 3 WHERE tenant_id = $1`, [TEST_TENANT_ID]);
+      await c.query(`UPDATE tenant_quota_usage SET user_count = 3 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
     });
 
     const res = await request(app.getHttpServer())
@@ -168,14 +188,23 @@ describe('Subscription & Quota API (integration)', () => {
   it('POST /api/files returns 429 QUOTA_EXCEEDED when storage is at free plan limit', async () => {
     const fiveGib = 5n * 1024n * 1024n * 1024n;
     await withAdmin(async (c) => {
-      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [FREE_PLAN_ID, TEST_TENANT_ID]);
-      await c.query(`UPDATE tenant_quota_usage SET storage_bytes = $1 WHERE tenant_id = $2`, [fiveGib.toString(), TEST_TENANT_ID]);
+      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [
+        FREE_PLAN_ID,
+        TEST_TENANT_ID,
+      ]);
+      await c.query(`UPDATE tenant_quota_usage SET storage_bytes = $1 WHERE tenant_id = $2`, [
+        fiveGib.toString(),
+        TEST_TENANT_ID,
+      ]);
     });
 
     const res = await request(app.getHttpServer())
       .post('/api/files')
       .set(bearer(adminToken))
-      .attach('file', Buffer.from('hello'), { filename: 'test.pdf', contentType: 'application/pdf' });
+      .attach('file', Buffer.from('hello'), {
+        filename: 'test.pdf',
+        contentType: 'application/pdf',
+      });
     expect(res.status).toBe(429);
     expect(res.body.code).toBe('QUOTA_EXCEEDED');
     expect(res.body.quota).toBe('storage');
@@ -185,9 +214,14 @@ describe('Subscription & Quota API (integration)', () => {
 
   it('POST /api/ai/ocr returns 429 QUOTA_EXCEEDED when ai_calls_month is at free plan limit', async () => {
     await withAdmin(async (c) => {
-      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [FREE_PLAN_ID, TEST_TENANT_ID]);
+      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [
+        FREE_PLAN_ID,
+        TEST_TENANT_ID,
+      ]);
       // free ai_quota_monthly=50
-      await c.query(`UPDATE tenant_quota_usage SET ai_calls_month = 50 WHERE tenant_id = $1`, [TEST_TENANT_ID]);
+      await c.query(`UPDATE tenant_quota_usage SET ai_calls_month = 50 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
     });
 
     const res = await request(app.getHttpServer())
@@ -206,7 +240,10 @@ describe('Subscription & Quota API (integration)', () => {
     // Set plan_id = free and ai_calls_month=50 but ai_calls_reset_at = last month.
     // QuotaGuard should detect the new month, reset, and allow the call.
     await withAdmin(async (c) => {
-      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [FREE_PLAN_ID, TEST_TENANT_ID]);
+      await c.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [
+        FREE_PLAN_ID,
+        TEST_TENANT_ID,
+      ]);
       await c.query(
         `UPDATE tenant_quota_usage
             SET ai_calls_month = 50,
@@ -265,37 +302,42 @@ describe('Subscription & Quota API (integration)', () => {
 
   // ── 8. ModuleGuard: disabled module → 403 MODULE_NOT_ENABLED ──────────────
 
-  it('AI endpoint returns 403 MODULE_NOT_ENABLED for a tenant with no ai module enabled', async () => {
-    // Provision a new tenant — it gets no tenant_modules rows.
-    const s = slug();
-    const ownerEmail = `owner-${s}@qa.local`;
-    const prov = await request(app.getHttpServer())
-      .post('/api/platform/tenants')
-      .set(bearer(platformToken))
-      .send({ name: 'No-Module Tenant', slug: s, ownerEmail, ownerPassword: 'TestPass123!', ownerName: 'QA' });
-    expect(prov.status).toBe(201);
-    const tenantId = prov.body.tenant.id as string;
-    createdTenantIds.push(tenantId);
-
-    const login = await request(app.getHttpServer())
-      .post('/api/auth/login')
-      .send({ email: ownerEmail, password: 'TestPass123!', tenantSlug: s });
-    expect(login.status).toBe(200);
-    const ownerToken = login.body.accessToken as string;
+  it('AI endpoint returns 403 MODULE_NOT_ENABLED when ai module is disabled', async () => {
+    // Disable the ai module for the test tenant, then re-enable in afterEach.
+    await withAdmin(async (c) => {
+      await c.query(
+        `UPDATE tenant_modules tm SET enabled = false
+           FROM modules m WHERE m.id = tm.module_id AND m.code = 'ai' AND tm.tenant_id = $1`,
+        [TEST_TENANT_ID],
+      );
+    });
 
     const res = await request(app.getHttpServer())
       .post('/api/ai/ocr')
-      .set(bearer(ownerToken))
+      .set(bearer(adminToken))
       .send({ fileId: '00000000-0000-0000-0000-000000000001' });
     expect(res.status).toBe(403);
-    expect(res.body.message?.code ?? res.body.code).toBe('MODULE_NOT_ENABLED');
+    expect(res.body.code).toBe('MODULE_NOT_ENABLED');
+
+    // Re-enable so subsequent tests are not affected.
+    await withAdmin(async (c) => {
+      await c.query(
+        `UPDATE tenant_modules tm SET enabled = true
+           FROM modules m WHERE m.id = tm.module_id AND m.code = 'ai' AND tm.tenant_id = $1`,
+        [TEST_TENANT_ID],
+      );
+    });
   });
 
   // ── 9. mobile alias ───────────────────────────────────────────────────────
 
   it('GET /api/mobile/v1/subscription returns the same structure as GET /api/subscription', async () => {
-    const tenant = await request(app.getHttpServer()).get('/api/subscription').set(bearer(adminToken));
-    const mobile = await request(app.getHttpServer()).get('/api/mobile/v1/subscription').set(bearer(adminToken));
+    const tenant = await request(app.getHttpServer())
+      .get('/api/subscription')
+      .set(bearer(adminToken));
+    const mobile = await request(app.getHttpServer())
+      .get('/api/mobile/v1/subscription')
+      .set(bearer(adminToken));
     expect(mobile.status).toBe(200);
     expect(mobile.body.plan.code).toBe(tenant.body.plan.code);
     expect(mobile.body.usage.userCount).toBe(tenant.body.usage.userCount);

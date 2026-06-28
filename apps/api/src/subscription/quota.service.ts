@@ -24,6 +24,10 @@ export class QuotaService {
   ): Promise<void> {
     const client = await this.pool.connect();
     try {
+      // Open a transaction so SET LOCAL (is_local=true) survives the two queries.
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
+
       // Resolve plan limits (fall back to standard when plan_id is NULL).
       const planRes = await client.query<{
         max_users: number;
@@ -36,11 +40,14 @@ export class QuotaService {
           WHERE t.id = $1`,
         [tenantId, STANDARD_PLAN_ID],
       );
-      if (planRes.rows.length === 0) return; // unknown tenant — let auth guard handle it
+      if (planRes.rows.length === 0) {
+        await client.query('COMMIT');
+        return; // unknown tenant — let auth guard handle it
+      }
 
       const limits = planRes.rows[0];
 
-      // Resolve current usage.
+      // Resolve current usage (FORCE RLS on tenant_quota_usage — context set above).
       const usageRes = await client.query<{
         user_count: number;
         storage_bytes: string;
@@ -51,14 +58,23 @@ export class QuotaService {
            FROM tenant_quota_usage WHERE tenant_id = $1`,
         [tenantId],
       );
-      if (usageRes.rows.length === 0) return; // no usage row yet — allow
+      if (usageRes.rows.length === 0) {
+        await client.query('COMMIT');
+        return; // no usage row yet — allow
+      }
 
+      await client.query('COMMIT');
       const usage = usageRes.rows[0];
 
       if (type === 'users') {
         if (usage.user_count >= limits.max_users) {
           throw new HttpException(
-            { code: 'QUOTA_EXCEEDED', quota: 'users', limit: limits.max_users, current: usage.user_count },
+            {
+              code: 'QUOTA_EXCEEDED',
+              quota: 'users',
+              limit: limits.max_users,
+              current: usage.user_count,
+            },
             HttpStatus.TOO_MANY_REQUESTS,
           );
         }
@@ -68,7 +84,12 @@ export class QuotaService {
         const incoming = BigInt(pendingBytes ?? 0);
         if (currentBytes + incoming > maxBytes) {
           throw new HttpException(
-            { code: 'QUOTA_EXCEEDED', quota: 'storage', limit: limits.max_storage_gb * 1024 * 1024 * 1024, current: Number(usage.storage_bytes) },
+            {
+              code: 'QUOTA_EXCEEDED',
+              quota: 'storage',
+              limit: limits.max_storage_gb * 1024 * 1024 * 1024,
+              current: Number(usage.storage_bytes),
+            },
             HttpStatus.TOO_MANY_REQUESTS,
           );
         }
@@ -82,7 +103,12 @@ export class QuotaService {
         }
         if (usage.ai_calls_month >= limits.ai_quota_monthly) {
           throw new HttpException(
-            { code: 'QUOTA_EXCEEDED', quota: 'ai', limit: limits.ai_quota_monthly, current: usage.ai_calls_month },
+            {
+              code: 'QUOTA_EXCEEDED',
+              quota: 'ai',
+              limit: limits.ai_quota_monthly,
+              current: usage.ai_calls_month,
+            },
             HttpStatus.TOO_MANY_REQUESTS,
           );
         }
@@ -103,20 +129,31 @@ export class QuotaService {
   }
 
   async addStorage(tenantId: string, userId: string, bytes: number): Promise<void> {
-    await this._upsertAndUpdate(tenantId, userId, `storage_bytes = storage_bytes + ${BigInt(bytes)}`);
+    await this._upsertAndUpdate(
+      tenantId,
+      userId,
+      `storage_bytes = storage_bytes + ${BigInt(bytes)}`,
+    );
   }
 
   async subtractStorage(tenantId: string, userId: string, bytes: number): Promise<void> {
-    await this._upsertAndUpdate(tenantId, userId, `storage_bytes = GREATEST(0, storage_bytes - ${BigInt(bytes)})`);
+    await this._upsertAndUpdate(
+      tenantId,
+      userId,
+      `storage_bytes = GREATEST(0, storage_bytes - ${BigInt(bytes)})`,
+    );
   }
 
   async incrementAi(tenantId: string, userId: string): Promise<void> {
     // Reset if new month, then increment.
-    await withTenantContext(this.pool, { tenantId, userId, actorType: 'tenant_user' }, async (client) => {
-      const now = new Date();
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      await client.query(
-        `INSERT INTO tenant_quota_usage (tenant_id, ai_calls_month, ai_calls_reset_at, updated_at)
+    await withTenantContext(
+      this.pool,
+      { tenantId, userId, actorType: 'tenant_user' },
+      async (client) => {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        await client.query(
+          `INSERT INTO tenant_quota_usage (tenant_id, ai_calls_month, ai_calls_reset_at, updated_at)
               VALUES ($1, 1, $2, now())
          ON CONFLICT (tenant_id) DO UPDATE
            SET ai_calls_month = CASE
@@ -129,9 +166,10 @@ export class QuotaService {
                  ELSE tenant_quota_usage.ai_calls_reset_at
                END,
                updated_at = now()`,
-        [tenantId, monthStart],
-      );
-    });
+          [tenantId, monthStart],
+        );
+      },
+    );
   }
 
   // ── Provision (called by TenantOnboardingService) ────────────────────────────
@@ -148,20 +186,31 @@ export class QuotaService {
 
   // ── Private helpers ──────────────────────────────────────────────────────────
 
-  private async _upsertAndUpdate(tenantId: string, userId: string, setClause: string): Promise<void> {
-    await withTenantContext(this.pool, { tenantId, userId, actorType: 'tenant_user' }, async (client) => {
-      await client.query(
-        `INSERT INTO tenant_quota_usage (tenant_id, updated_at)
+  private async _upsertAndUpdate(
+    tenantId: string,
+    userId: string,
+    setClause: string,
+  ): Promise<void> {
+    await withTenantContext(
+      this.pool,
+      { tenantId, userId, actorType: 'tenant_user' },
+      async (client) => {
+        await client.query(
+          `INSERT INTO tenant_quota_usage (tenant_id, updated_at)
               VALUES ($1, now())
          ON CONFLICT (tenant_id) DO UPDATE SET ${setClause}, updated_at = now()`,
-        [tenantId],
-      );
-    });
+          [tenantId],
+        );
+      },
+    );
   }
 
   private async _resetAiCalls(tenantId: string): Promise<void> {
+    // Use a system-actor context so FORCE RLS on tenant_quota_usage is satisfied.
     const client = await this.pool.connect();
     try {
+      await client.query('BEGIN');
+      await client.query(`SELECT set_config('app.current_tenant_id', $1, true)`, [tenantId]);
       await client.query(
         `UPDATE tenant_quota_usage
             SET ai_calls_month = 0,
@@ -170,6 +219,10 @@ export class QuotaService {
           WHERE tenant_id = $1`,
         [tenantId],
       );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
     } finally {
       client.release();
     }

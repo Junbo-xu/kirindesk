@@ -3,7 +3,10 @@ import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { SubscriptionService } from './subscription.service';
 
-interface TenantJwtUser { sub: string; tenantId: string }
+interface TenantJwtUser {
+  sub: string;
+  tenantId: string;
+}
 
 @Controller()
 @UseGuards(TenantAuthGuard)

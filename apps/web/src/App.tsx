@@ -30,6 +30,7 @@ import { RolePermissionsPage } from './roles/RolePermissionsPage';
 import { SettingsPage } from './settings/SettingsPage';
 import { AuditLogsPage } from './audit/AuditLogsPage';
 import { SupportAccessPage } from './support-access/SupportAccessPage';
+import { SubscriptionPage } from './subscription/SubscriptionPage';
 import { PlatformAuthProvider } from './platform/PlatformAuthContext';
 import { PlatformProtectedRoute } from './platform/PlatformProtectedRoute';
 import { PlatformLayout } from './platform/PlatformLayout';
@@ -88,6 +89,7 @@ export function App() {
               <Route path="/roles/:id/edit" element={<RolePermissionsPage />} />
               <Route path="/audit-logs" element={<AuditLogsPage />} />
               <Route path="/support-access" element={<SupportAccessPage />} />
+              <Route path="/subscription" element={<SubscriptionPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Route>
           </Route>

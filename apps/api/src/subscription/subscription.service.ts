@@ -34,59 +34,79 @@ export class SubscriptionService {
   ) {}
 
   async getForTenant(tenantId: string, userId: string): Promise<SubscriptionDetail> {
-    return withTenantContext(this.pool, { tenantId, userId, actorType: 'tenant_user' }, async (client) => {
-      const planRes = await client.query<{
-        plan_id: string; plan_code: string; plan_name: string;
-        max_users: number; max_storage_gb: number; ai_quota_monthly: number;
-        plan_expires_at: Date | null;
-      }>(
-        `SELECT p.id AS plan_id, p.code AS plan_code, p.name AS plan_name,
+    return withTenantContext(
+      this.pool,
+      { tenantId, userId, actorType: 'tenant_user' },
+      async (client) => {
+        const planRes = await client.query<{
+          plan_id: string;
+          plan_code: string;
+          plan_name: string;
+          max_users: number;
+          max_storage_gb: number;
+          ai_quota_monthly: number;
+          plan_expires_at: Date | null;
+        }>(
+          `SELECT p.id AS plan_id, p.code AS plan_code, p.name AS plan_name,
                 p.max_users, p.max_storage_gb, p.ai_quota_monthly,
                 t.plan_expires_at
            FROM tenants t
            JOIN plans p ON p.id = COALESCE(t.plan_id, $2)
           WHERE t.id = $1`,
-        [tenantId, STANDARD_PLAN_ID],
-      );
-      if (planRes.rows.length === 0) throw new NotFoundException('Tenant not found');
-      const p = planRes.rows[0];
+          [tenantId, STANDARD_PLAN_ID],
+        );
+        if (planRes.rows.length === 0) throw new NotFoundException('Tenant not found');
+        const p = planRes.rows[0];
 
-      const usageRes = await client.query<{
-        user_count: number; storage_bytes: string;
-        ai_calls_month: number; ai_calls_reset_at: Date;
-      }>(
-        `SELECT user_count, storage_bytes, ai_calls_month, ai_calls_reset_at
+        const usageRes = await client.query<{
+          user_count: number;
+          storage_bytes: string;
+          ai_calls_month: number;
+          ai_calls_reset_at: Date;
+        }>(
+          `SELECT user_count, storage_bytes, ai_calls_month, ai_calls_reset_at
            FROM tenant_quota_usage WHERE tenant_id = $1`,
-        [tenantId],
-      );
-      const usage = usageRes.rows[0] ?? { user_count: 0, storage_bytes: '0', ai_calls_month: 0, ai_calls_reset_at: new Date() };
+          [tenantId],
+        );
+        const usage = usageRes.rows[0] ?? {
+          user_count: 0,
+          storage_bytes: '0',
+          ai_calls_month: 0,
+          ai_calls_reset_at: new Date(),
+        };
 
-      const modRes = await client.query<{ code: string; name: string; enabled: boolean }>(
-        `SELECT m.code, m.name,
+        const modRes = await client.query<{ code: string; name: string; enabled: boolean }>(
+          `SELECT m.code, m.name,
                 COALESCE(tm.enabled, false) AS enabled
            FROM modules m
            LEFT JOIN tenant_modules tm ON tm.module_id = m.id AND tm.tenant_id = $1
           ORDER BY m.sort_order`,
-        [tenantId],
-      );
+          [tenantId],
+        );
 
-      return {
-        plan: {
-          id: p.plan_id, code: p.plan_code, name: p.plan_name,
-          maxUsers: p.max_users, maxStorageGb: p.max_storage_gb, aiQuotaMonthly: p.ai_quota_monthly,
-          expiresAt: p.plan_expires_at?.toISOString() ?? null,
-        },
-        usage: {
-          userCount: usage.user_count,
-          storageBytes: usage.storage_bytes,
-          aiCallsMonth: usage.ai_calls_month,
-          aiCallsResetAt: usage.ai_calls_reset_at instanceof Date
-            ? usage.ai_calls_reset_at.toISOString()
-            : String(usage.ai_calls_reset_at),
-        },
-        modules: modRes.rows,
-      };
-    });
+        return {
+          plan: {
+            id: p.plan_id,
+            code: p.plan_code,
+            name: p.plan_name,
+            maxUsers: p.max_users,
+            maxStorageGb: p.max_storage_gb,
+            aiQuotaMonthly: p.ai_quota_monthly,
+            expiresAt: p.plan_expires_at?.toISOString() ?? null,
+          },
+          usage: {
+            userCount: usage.user_count,
+            storageBytes: usage.storage_bytes,
+            aiCallsMonth: usage.ai_calls_month,
+            aiCallsResetAt:
+              usage.ai_calls_reset_at instanceof Date
+                ? usage.ai_calls_reset_at.toISOString()
+                : String(usage.ai_calls_reset_at),
+          },
+          modules: modRes.rows,
+        };
+      },
+    );
   }
 
   // ── Platform-side ─────────────────────────────────────────────────────────

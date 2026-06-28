@@ -44,7 +44,7 @@ type MulterFile = {
 };
 
 @Controller('api/files')
-@UseGuards(TenantAuthGuard, PermissionGuard)
+@UseGuards(TenantAuthGuard, PermissionGuard, QuotaGuard)
 export class FilesController {
   constructor(private readonly filesService: FilesService) {}
 
@@ -57,7 +57,6 @@ export class FilesController {
   }
 
   @Post()
-  @UseGuards(QuotaGuard)
   @CheckQuota('storage')
   @RequirePermission('files', 'upload')
   @UseInterceptors(

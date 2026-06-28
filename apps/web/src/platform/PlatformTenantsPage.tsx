@@ -1,6 +1,13 @@
 import { CSSProperties, useCallback, useEffect, useState } from 'react';
 import { platformClient } from '../lib/platform-client';
-import { ApiError, CreateTenantInput, PlatformTenantSummary, TenantStatus } from '../lib/types';
+import {
+  ApiError,
+  CreateTenantInput,
+  PlanSummary,
+  PlatformTenantSummary,
+  TenantStatus,
+  TenantSubscription,
+} from '../lib/types';
 
 // Platform-side tenant lifecycle console (plan §5.3, over the 1K-A endpoints).
 // Metadata only — never tenant business data. The three persisted statuses map
@@ -61,6 +68,7 @@ export function PlatformTenantsPage() {
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [showProvision, setShowProvision] = useState(false);
   const [provisionSuccess, setProvisionSuccess] = useState<string | null>(null);
+  const [planTenant, setPlanTenant] = useState<PlatformTenantSummary | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -167,6 +175,7 @@ export function PlatformTenantsPage() {
             <tr>
               <th style={th}>名称 / 标识</th>
               <th style={th}>状态</th>
+              <th style={th}>套餐</th>
               <th style={th}>暂停原因</th>
               <th style={th}>创建时间</th>
               <th style={th}>操作</th>
@@ -182,6 +191,14 @@ export function PlatformTenantsPage() {
                     <div style={{ color: '#888', fontSize: 12 }}>{t.slug}</div>
                   </td>
                   <td style={{ ...td, color: s.color }}>{s.text}</td>
+                  <td style={td}>
+                    <button
+                      style={{ fontSize: 12, cursor: 'pointer' }}
+                      onClick={() => setPlanTenant((prev) => (prev?.id === t.id ? null : t))}
+                    >
+                      套餐
+                    </button>
+                  </td>
                   <td style={{ ...td, color: '#666', fontSize: 12 }}>{t.suspendedReason ?? '—'}</td>
                   <td style={{ ...td, fontSize: 12 }}>{new Date(t.createdAt).toLocaleString()}</td>
                   <td style={td}>
@@ -241,6 +258,10 @@ export function PlatformTenantsPage() {
             load();
           }}
         />
+      )}
+
+      {planTenant && (
+        <PlanPanel tenant={planTenant} onClose={() => setPlanTenant(null)} />
       )}
     </div>
   );
@@ -422,6 +443,118 @@ function ProvisionPanel({ onDone }: { onDone: (name: string, slug: string) => vo
 // Modal-ish inline confirm panel. Suspend/deactivate require a reason; activate
 // accepts an optional note. Errors (409 illegal transition, 404, 400 empty
 // reason) surface inside the panel without closing it.
+function PlanPanel({
+  tenant,
+  onClose,
+}: {
+  tenant: PlatformTenantSummary;
+  onClose: () => void;
+}) {
+  const [sub, setSub] = useState<TenantSubscription | null>(null);
+  const [plans, setPlans] = useState<PlanSummary[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      platformClient.getTenantSubscription(tenant.id),
+      platformClient.listPlans(),
+    ])
+      .then(([s, p]) => {
+        setSub(s);
+        setPlans(p);
+        setSelectedPlanId(s.plan_id ?? '');
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : '加载失败'));
+  }, [tenant.id]);
+
+  const overlay: CSSProperties = {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.35)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
+  const card: CSSProperties = {
+    background: '#fff',
+    padding: 20,
+    borderRadius: 6,
+    width: 440,
+    maxWidth: '90vw',
+    fontFamily: 'system-ui',
+  };
+
+  const assign = () => {
+    if (!selectedPlanId) return;
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+    platformClient
+      .assignPlan(tenant.id, selectedPlanId)
+      .then(() => setSuccess('套餐已更新'))
+      .catch((e) => setError(e instanceof Error ? e.message : '操作失败'))
+      .finally(() => setSubmitting(false));
+  };
+
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={card} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ fontSize: 17, marginTop: 0 }}>套餐管理</h2>
+        <p style={{ fontSize: 14, color: '#333' }}>
+          租户：<strong>{tenant.name}</strong>（{tenant.slug}）
+        </p>
+        {!sub ? (
+          error ? <p style={{ color: 'crimson' }}>{error}</p> : <p>加载中…</p>
+        ) : (
+          <>
+            <p style={{ fontSize: 13, color: '#555' }}>
+              当前套餐：<strong>{sub.plan_name ?? '未分配（使用标准版默认限制）'}</strong>
+              {sub.plan_expires_at && ` · 有效期至 ${new Date(sub.plan_expires_at).toLocaleDateString()}`}
+            </p>
+            <p style={{ fontSize: 13, color: '#555' }}>
+              用量：{sub.user_count} 用户 · {(Number(sub.storage_bytes) / (1024 ** 3)).toFixed(2)} GB ·
+              {sub.ai_calls_month} AI 调用（本月）
+            </p>
+            <div style={{ marginTop: 12 }}>
+              <label style={{ fontSize: 13 }}>
+                变更套餐：
+                <select
+                  value={selectedPlanId}
+                  onChange={(e) => setSelectedPlanId(e.target.value)}
+                  style={{ marginLeft: 8 }}
+                  disabled={submitting}
+                >
+                  <option value="">—— 选择套餐 ——</option>
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}（{p.maxUsers} 用户 / {p.maxStorageGb}GB / {p.aiQuotaMonthly} AI）
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {error && <p style={{ color: 'crimson', fontSize: 13 }}>{error}</p>}
+            {success && <p style={{ color: '#0a7d23', fontSize: 13 }}>{success}</p>}
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={onClose}>关闭</button>
+              <button
+                onClick={assign}
+                disabled={submitting || !selectedPlanId}
+                style={{ cursor: 'pointer' }}
+              >
+                {submitting ? '保存中…' : '保存'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ActionDialog({
   pending,
   onClose,

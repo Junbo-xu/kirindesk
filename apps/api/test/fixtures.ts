@@ -105,6 +105,18 @@ export const AI_PERMS = ['ocr:view', 'ocr:process', 'ai:view', 'ai:process'] as 
 export const REPORTS_PERMS = ['reports:view'] as const;
 export const AUDIT_PERMS = ['audit_logs:view'] as const;
 
+// Phase 1H user + role management (system module). Added to SEED_PERMS so the
+// subscription integration test can POST /api/users (users:create required).
+export const USER_MGMT_PERMS = [
+  'users:view',
+  'users:create',
+  'users:update',
+  'roles:view',
+  'roles:create',
+  'roles:update',
+  'roles:delete',
+] as const;
+
 // Phase 1K-B support access (system module). Granted ONLY to the admin roles
 // (scope=all) below — deliberately NOT in SEED_PERMS, whose codes go to every
 // fixture role: the sales (scope=own) and no-role users must lack these codes
@@ -129,6 +141,7 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
   ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
   ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
+  ...USER_MGMT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
 ];
 
 interface RoleSpec {
@@ -182,6 +195,15 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
     }
 
     const passwordHash = bcrypt.hashSync(TEST_PASSWORD, 10);
+
+    // --- plans (seeded in db/seeds but not by pnpm migrate; required by SubscriptionService) ---
+    await client.query(
+      `INSERT INTO plans (id, code, name, description, price_monthly, price_yearly, currency, max_users, max_storage_gb, ai_quota_monthly, status, sort_order) VALUES
+         ('b0000000-0000-0000-0000-000000000001','free','免费版','',0,0,'CNY',3,5,50,'active',1),
+         ('b0000000-0000-0000-0000-000000000002','standard','标准版','',299,2990,'CNY',10,50,500,'active',2),
+         ('b0000000-0000-0000-0000-000000000003','professional','专业版','',599,5990,'CNY',50,200,2000,'active',3)
+       ON CONFLICT (code) DO NOTHING`,
+    );
 
     // --- tenants ---
     await client.query(
@@ -336,24 +358,15 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
     );
 
     // --- tenant_modules: all modules enabled for both tenants (required by ModuleGuard) ---
+    // Look up IDs by code at runtime — migration seeds may use different UUIDs than
+    // the fixture constants, so hardcoding them causes FK mismatches.
     for (const tenantId of [TEST_TENANT_ID, TEST_TENANT2_ID]) {
-      for (const moduleId of [
-        CRM_MODULE_ID,
-        ORDERS_MODULE_ID,
-        PROCUREMENT_MODULE_ID,
-        FILES_MODULE_ID,
-        SYSTEM_MODULE_ID,
-        FINANCE_MODULE_ID,
-        AI_MODULE_ID,
-        REPORTS_MODULE_ID,
-      ]) {
-        await client.query(
-          `INSERT INTO tenant_modules (tenant_id, module_id, enabled)
-           VALUES ($1, $2, true)
-           ON CONFLICT (tenant_id, module_id) DO NOTHING`,
-          [tenantId, moduleId],
-        );
-      }
+      await client.query(
+        `INSERT INTO tenant_modules (tenant_id, module_id, enabled)
+         SELECT $1, m.id, true FROM modules m
+         ON CONFLICT (tenant_id, module_id) DO NOTHING`,
+        [tenantId],
+      );
     }
   } finally {
     await client.end();

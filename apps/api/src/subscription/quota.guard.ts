@@ -19,7 +19,7 @@ export class QuotaGuard implements CanActivate {
 
     // For storage, extract file size from multipart header or body field.
     const pendingBytes =
-      type === 'storage' ? (Number(req.headers['content-length']) || 0) : undefined;
+      type === 'storage' ? Number(req.headers['content-length']) || 0 : undefined;
 
     await this.quota.checkQuota(user.tenantId, type, pendingBytes);
     return true;

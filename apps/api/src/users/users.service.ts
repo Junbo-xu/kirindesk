@@ -144,9 +144,9 @@ export class UsersService {
       after: { ...toUserSummary(row), roles },
     });
 
-    void this.quota.increment(actor.tenantId, actor.userId).catch(() =>
-      this.logger.warn('quota increment failed for user.create'),
-    );
+    void this.quota
+      .increment(actor.tenantId, actor.userId)
+      .catch(() => this.logger.warn('quota increment failed for user.create'));
     return toUserDetail(row, roles);
   }
 
@@ -318,9 +318,9 @@ export class UsersService {
       after: { ...toUserSummary(before), status: 'inactive', deleted: true },
     });
 
-    void this.quota.decrement(actor.tenantId, actor.userId).catch(() =>
-      this.logger.warn('quota decrement failed for user.deactivate'),
-    );
+    void this.quota
+      .decrement(actor.tenantId, actor.userId)
+      .catch(() => this.logger.warn('quota decrement failed for user.deactivate'));
   }
 
   // --- helpers ---

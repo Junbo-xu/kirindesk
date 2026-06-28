@@ -15,6 +15,8 @@ import {
   RoleSummary,
   TenantOnboardingResult,
   UserSummary,
+  PlanSummary,
+  TenantSubscription,
 } from './types';
 
 // Phase 1K-B platform console (plan §5.3/§5.4). The platform identity is a
@@ -209,5 +211,19 @@ export const platformClient = {
   },
   tenantRoles(tenantId: string): Promise<RoleSummary[]> {
     return platformRequest<RoleSummary[]>(`/api/platform/support/tenants/${tenantId}/roles`);
+  },
+
+  // Phase 1M subscription management
+  listPlans(): Promise<PlanSummary[]> {
+    return platformRequest<PlanSummary[]>('/api/platform/plans');
+  },
+  getTenantSubscription(tenantId: string): Promise<TenantSubscription> {
+    return platformRequest<TenantSubscription>(`/api/platform/tenants/${tenantId}/subscription`);
+  },
+  assignPlan(tenantId: string, planId: string, planExpiresAt?: string): Promise<void> {
+    return platformRequest<void>(`/api/platform/tenants/${tenantId}/subscription`, {
+      method: 'PUT',
+      body: { planId, ...(planExpiresAt ? { planExpiresAt } : {}) },
+    });
   },
 };

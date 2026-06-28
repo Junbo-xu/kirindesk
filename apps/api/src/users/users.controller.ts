@@ -39,7 +39,7 @@ interface TenantJwtUser {
  * the service (plan §4) — never trusted to the UI.
  */
 @Controller('api/users')
-@UseGuards(TenantAuthGuard, PermissionGuard)
+@UseGuards(TenantAuthGuard, PermissionGuard, QuotaGuard)
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
@@ -52,7 +52,6 @@ export class UsersController {
   }
 
   @Post()
-  @UseGuards(QuotaGuard)
   @CheckQuota('users')
   @RequirePermission('users', 'create')
   async create(

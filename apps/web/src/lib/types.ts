@@ -813,6 +813,51 @@ export interface CreateTenantInput {
   locale?: string;
 }
 
+// Phase 1M subscription (plan §4.1 / §5).
+export interface SubscriptionDetail {
+  plan: {
+    id: string;
+    code: string;
+    name: string;
+    maxUsers: number;
+    maxStorageGb: number;
+    aiQuotaMonthly: number;
+    expiresAt: string | null;
+  };
+  usage: {
+    userCount: number;
+    storageBytes: string; // pg bigint as string
+    aiCallsMonth: number;
+    aiCallsResetAt: string;
+  };
+  modules: { code: string; name: string; enabled: boolean }[];
+}
+
+export interface PlanSummary {
+  id: string;
+  code: string;
+  name: string;
+  maxUsers: number;
+  maxStorageGb: number;
+  aiQuotaMonthly: number;
+  status: string;
+}
+
+export interface TenantSubscription {
+  tenant_id: string;
+  plan_id: string | null;
+  plan_assigned_at: string | null;
+  plan_expires_at: string | null;
+  plan_code: string | null;
+  plan_name: string | null;
+  max_users: number;
+  max_storage_gb: number;
+  ai_quota_monthly: number;
+  user_count: number;
+  storage_bytes: string;
+  ai_calls_month: number;
+}
+
 export interface TenantOnboardingResult {
   tenant: PlatformTenantSummary;
   owner: {
