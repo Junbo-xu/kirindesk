@@ -1,0 +1,19 @@
+# Keep the Docker build context lean and never ship secrets or local state.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.gitignore
+.claude
+.env
+.env.*
+!.env.production.example
+docker-compose.override.yml
+**/*.log
+logs
+coverage
+.turbo
+.DS_Store
+storage
+docker/postgres/data
+docker/redis/data

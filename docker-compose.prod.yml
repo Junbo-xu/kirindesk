@@ -1,0 +1,166 @@
+# Phase 3A — KirinDesk private-deployment stack (single host, Docker Compose).
+#
+# Topology: only the `web` (nginx) service publishes a host port. Postgres /
+# Redis / MinIO and the API are reachable ONLY on the internal compose network
+# (plan §4.1 R3 — never expose data stores to the host/public). nginx serves the
+# SPA and reverse-proxies /api to the API, so the app is same-origin.
+#
+# Credential separation (plan §1.1 / security-hardening-plan):
+#   - The one-shot `migrate` container gets the SUPERUSER DATABASE_URL.
+#   - The long-running `api` container gets ONLY the app-role APP_DATABASE_URL.
+#     It never receives DATABASE_URL.
+#
+# Usage (see the build/run command list — do not run blindly):
+#   cp .env.production.example .env.production   # then fill in real secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+# All values come from the --env-file; this file hardcodes no secrets.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - kirindesk_pgdata:/var/lib/postgresql/data
+    # No host port mapping: internal network only.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - kirindesk_redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - internal
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - kirindesk_minio:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - internal
+
+  # One-shot DB migrations. Uses the build stage of the API image (it keeps tsx +
+  # @kirindesk/database + db/migrations). Runs with the SUPERUSER connection
+  # string, applies pending migrations, then exits. The api service waits for it
+  # to complete successfully before starting.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: build
+    command: ['pnpm', 'db:migrate']
+    environment:
+      # Superuser connection — only the migrate container ever receives this.
+      DATABASE_URL: ${DATABASE_URL}
+      NODE_ENV: ${NODE_ENV:-production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+    networks:
+      - internal
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      API_PORT: '3001'
+      # App-role connection ONLY — never the superuser DATABASE_URL.
+      APP_DATABASE_URL: ${APP_DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      TENANT_JWT_SECRET: ${TENANT_JWT_SECRET}
+      TENANT_JWT_EXPIRES_IN: ${TENANT_JWT_EXPIRES_IN:-2h}
+      PLATFORM_JWT_SECRET: ${PLATFORM_JWT_SECRET}
+      PLATFORM_JWT_EXPIRES_IN: ${PLATFORM_JWT_EXPIRES_IN:-2h}
+      S3_ENDPOINT: ${S3_ENDPOINT}
+      S3_REGION: ${S3_REGION}
+      S3_BUCKET: ${S3_BUCKET}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      # Behind nginx: trust X-Forwarded-For so the signup rate limiter keys on
+      # the real client IP.
+      TRUST_PROXY: 'true'
+      # CORS off by default (same-origin via nginx). Override only if needed.
+      CORS_ENABLED: ${CORS_ENABLED:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      SIGNUP_RATE_LIMIT_MAX: ${SIGNUP_RATE_LIMIT_MAX:-5}
+      SIGNUP_RATE_LIMIT_WINDOW_SEC: ${SIGNUP_RATE_LIMIT_WINDOW_SEC:-3600}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Node-only readiness probe (no curl in the runtime image).
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - internal
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    # The ONLY service published to the host. Default 8080; override via WEB_HTTP_PORT.
+    ports:
+      - '${WEB_HTTP_PORT:-8080}:80'
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
+volumes:
+  kirindesk_pgdata:
+  kirindesk_redis:
+  kirindesk_minio:
+
+networks:
+  internal:
+    driver: bridge

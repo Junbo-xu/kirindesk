@@ -1,5 +1,8 @@
 # Claude Code local config
 .claude/settings.local.json
+# Internal agent worktrees — must never enter version control
+.claude/worktrees/
+.claude/settings.local.json.bak.*
 
 # Dependencies
 node_modules/
@@ -14,6 +17,8 @@ vite.config.d.ts
 .env
 .env.local
 .env.*.local
+.env.production
+.env.production.local
 
 # OS
 .DS_Store

@@ -1,10 +1,16 @@
 import { config } from 'dotenv';
+import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-config({ path: resolve(__dirname, '..', '..', '..', '.env') });
+// Load the repo .env only when present, and never override injected env vars —
+// in a migration/seed container the environment is the source of truth (Phase 3A).
+const envPath = resolve(__dirname, '..', '..', '..', '.env');
+if (existsSync(envPath)) {
+  config({ path: envPath, override: false });
+}
 
 const { Pool } = pg;
 
