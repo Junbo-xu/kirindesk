@@ -23,6 +23,7 @@ import { TenantLifecycleModule } from './tenant-lifecycle/tenant-lifecycle.modul
 import { SupportAccessModule } from './support-access/support-access.module';
 import { SubscriptionModule } from './subscription/subscription.module';
 import { NotificationModule } from './notification/notification.module';
+import { BillingModule } from './billing/billing.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { NotificationModule } from './notification/notification.module';
     SupportAccessModule,
     SubscriptionModule,
     NotificationModule,
+    BillingModule,
   ],
 })
 export class AppModule {}

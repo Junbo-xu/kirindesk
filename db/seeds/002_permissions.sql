@@ -27,6 +27,8 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_payouts:view', '查看提成发放单', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_payouts:disburse', '发放提成', 'disburse'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'commission_payouts:reverse', '作废提成发放单', 'reverse'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'billing:view', '查看账单', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'billing:pay', '支付账单', 'pay'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:view', '查看文件', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:upload', '上传文件', 'upload'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000005', 'files:download', '下载文件', 'download'),

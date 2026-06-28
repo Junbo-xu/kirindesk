@@ -128,6 +128,11 @@ export const SUPPORT_ACCESS_PERMS = [
   'support_access:view',
 ] as const;
 
+// Phase 2A billing & payment (finance module). view = read invoices, pay = pay
+// an invoice. In SEED_PERMS so admin/sales roles hold them; the no-role user
+// lacks them for the 403 case.
+export const BILLING_PERMS = ['billing:view', 'billing:pay'] as const;
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -138,6 +143,7 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...TENANT_SETTINGS_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
   ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...BILLING_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
   ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
   ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
