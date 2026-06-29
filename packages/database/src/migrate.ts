@@ -11,6 +11,25 @@ function checksum(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+// Substitute ${VAR} placeholders with env values, escaped for a single-quoted
+// SQL string literal. Lets a migration take a runtime secret (e.g. the app-role
+// password) from the environment instead of hardcoding it. Checksums are
+// computed on the RAW file (placeholder intact), so the recorded checksum is
+// stable across deployments regardless of the substituted value. Does not
+// collide with Postgres $$ dollar-quoting (requires {NAME}). Fail-fast on a
+// missing var so we never silently apply an empty/wrong secret.
+export function substituteEnv(sql: string): string {
+  return sql.replace(/\$\{([A-Z0-9_]+)\}/g, (_m, name: string) => {
+    const val = process.env[name];
+    if (val === undefined || val === '') {
+      throw new Error(
+        `Migration references \${${name}} but env var ${name} is not set.`
+      );
+    }
+    return val.replace(/'/g, "''");
+  });
+}
+
 function extractSection(sql: string, marker: '-- UP' | '-- DOWN'): string {
   const lines = sql.split('\n');
   const upIdx = lines.findIndex((l) => l.trim() === '-- UP');
@@ -68,7 +87,7 @@ export async function migrate(): Promise<void> {
       continue;
     }
 
-    const upSql = extractSection(sql, '-- UP');
+    const upSql = substituteEnv(extractSection(sql, '-- UP'));
     if (!upSql) {
       console.log(`SKIP ${filename} (empty UP section)`);
       continue;

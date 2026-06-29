@@ -1,8 +1,13 @@
 -- UP
+-- The app-role password is injected from the APP_DB_PASSWORD env var at migrate
+-- time (migrate.ts substituteEnv); never hardcoded. Self-healing: creates the
+-- role on a fresh cluster, or converges its password if it already exists.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'kirindesk_app') THEN
-    CREATE ROLE kirindesk_app WITH LOGIN PASSWORD 'kirindesk_app_dev_password' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    CREATE ROLE kirindesk_app WITH LOGIN PASSWORD '${APP_DB_PASSWORD}' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+  ELSE
+    ALTER ROLE kirindesk_app WITH LOGIN PASSWORD '${APP_DB_PASSWORD}';
   END IF;
 END
 $$;

@@ -30,6 +30,8 @@ process.env.TENANT_JWT_SECRET = 'test-tenant-jwt-secret';
 process.env.PLATFORM_JWT_SECRET = 'test-platform-jwt-secret';
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.APP_DATABASE_URL = TEST_APP_DATABASE_URL;
+// Injected into migration 000 when the fresh test DB is migrated below.
+process.env.APP_DB_PASSWORD = process.env.APP_DB_PASSWORD ?? 'kirindesk_app_dev_password';
 
 // StorageModule's factory reads these at construction (loadStorageConfig throws
 // on missing vars). Integration tests that touch files override STORAGE_PROVIDER

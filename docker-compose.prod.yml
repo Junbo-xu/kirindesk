@@ -78,6 +78,9 @@ services:
     environment:
       # Superuser connection — only the migrate container ever receives this.
       DATABASE_URL: ${DATABASE_URL}
+      # App-role password injected into migration 000 (creates kirindesk_app).
+      # Must match the password embedded in the api's APP_DATABASE_URL.
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
       NODE_ENV: ${NODE_ENV:-production}
     depends_on:
       postgres:

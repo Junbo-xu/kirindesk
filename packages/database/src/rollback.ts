@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getPool, closePool } from './client.js';
+import { substituteEnv } from './migrate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_DIR = join(__dirname, '..', '..', '..', 'db', 'migrations');
@@ -33,7 +34,7 @@ export async function rollback(): Promise<void> {
   }
 
   const sql = readFileSync(join(MIGRATIONS_DIR, filename), 'utf-8');
-  const downSql = extractDown(sql);
+  const downSql = substituteEnv(extractDown(sql));
   if (!downSql) {
     throw new Error(`Migration ${filename} has no -- DOWN section.`);
   }
