@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { PlatformAuthController } from './platform-auth.controller';
 import { PlatformAuthService } from './platform-auth.service';
@@ -13,7 +13,11 @@ import { requireEnv } from '../common/env';
     PassportModule,
     JwtModule.register({
       secret: requireEnv('PLATFORM_JWT_SECRET'),
-      signOptions: { expiresIn: process.env.PLATFORM_JWT_EXPIRES_IN || '2h' } as any,
+      signOptions: {
+        expiresIn: (process.env.PLATFORM_JWT_EXPIRES_IN || '2h') as NonNullable<
+          JwtModuleOptions['signOptions']
+        >['expiresIn'],
+      },
     }),
     AuditModule,
   ],

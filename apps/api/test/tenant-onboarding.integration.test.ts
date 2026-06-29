@@ -8,13 +8,7 @@ import request from 'supertest';
 import { closePool, verifyChain } from '@kirindesk/database';
 import { AppModule } from '../src/app.module';
 import { APP_POOL } from '../src/database/database.module';
-import {
-  TEST_ADMIN_EMAIL,
-  TEST_PASSWORD,
-  TEST_TENANT_SLUG,
-  TEST_USER_EMAIL,
-  ZERO_HASH,
-} from './fixtures';
+import { TEST_ADMIN_EMAIL, TEST_PASSWORD, TEST_TENANT_SLUG, TEST_USER_EMAIL } from './fixtures';
 
 // Phase 1L tenant onboarding integration (plan §6.2). Covers atomic provision
 // (3 rows in one tx), password security (no plaintext in response/audit),

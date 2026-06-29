@@ -1,5 +1,5 @@
-import { Module, forwardRef } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { Module } from '@nestjs/common';
+import { JwtModule, JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
@@ -14,7 +14,11 @@ import { requireEnv } from '../common/env';
     PassportModule,
     JwtModule.register({
       secret: requireEnv('TENANT_JWT_SECRET'),
-      signOptions: { expiresIn: process.env.TENANT_JWT_EXPIRES_IN || '2h' } as any,
+      signOptions: {
+        expiresIn: (process.env.TENANT_JWT_EXPIRES_IN || '2h') as NonNullable<
+          JwtModuleOptions['signOptions']
+        >['expiresIn'],
+      },
     }),
     UsersModule,
     AuditModule,
