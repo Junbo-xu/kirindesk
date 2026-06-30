@@ -119,6 +119,12 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-}
       SIGNUP_RATE_LIMIT_MAX: ${SIGNUP_RATE_LIMIT_MAX:-5}
       SIGNUP_RATE_LIMIT_WINDOW_SEC: ${SIGNUP_RATE_LIMIT_WINDOW_SEC:-3600}
+      # Notification email / SMTP (Phase 1N real-send). Blank SMTP_HOST = mock.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     depends_on:
       postgres:
         condition: service_healthy
