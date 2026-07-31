@@ -1,4 +1,6 @@
 import {
+  HttpException,
+  HttpStatus,
   InternalServerErrorException,
   NotFoundException,
   RequestTimeoutException,
@@ -37,6 +39,28 @@ export class OcrTimeoutException extends RequestTimeoutException {
 export class AiTimeoutException extends RequestTimeoutException {
   constructor(timeoutMs: number) {
     super(`AI operation timed out after ${timeoutMs}ms`);
+  }
+}
+
+/** Vendor-neutral provider throttling signal. A DeepSeek adapter can map its
+ *  HTTP 429 here without exposing response bodies, request ids, or key data. */
+export class AiRateLimitException extends HttpException {
+  constructor() {
+    super('AI provider rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
+  }
+}
+
+/** Upstream replied, but its response was not the documented JSON shape. */
+export class AiResponseParseException extends InternalServerErrorException {
+  constructor() {
+    super('AI provider returned an invalid response');
+  }
+}
+
+/** Approved test spend/call boundary has been reached. */
+export class AiBudgetExceededException extends HttpException {
+  constructor() {
+    super('AI provider test budget exhausted', HttpStatus.SERVICE_UNAVAILABLE);
   }
 }
 

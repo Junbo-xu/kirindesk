@@ -9,7 +9,8 @@
     "lint": "eslint src test --config ../../eslint.config.mjs",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "verify:deepseek": "tsx src/ai/verify-deepseek.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1066.0",

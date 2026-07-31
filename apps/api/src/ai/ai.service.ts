@@ -27,6 +27,7 @@ export interface AiCompleteRequest {
   input: string;
   timeoutMs?: number;
   maxOutputTokens?: number;
+  dataClassification?: 'business' | 'synthetic_test';
 }
 
 export interface ListInvocationsQuery {
@@ -57,6 +58,10 @@ export interface AiCompleteResponse {
   invocation: InvocationSummary;
   output: string;
 }
+
+export type AiCompleteOutcome =
+  | { ok: true; response: AiCompleteResponse }
+  | { ok: false; invocation: InvocationSummary; error: unknown };
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
@@ -144,6 +149,7 @@ export class AiService {
       status,
       durationMs: result?.durationMs ?? null,
       tokensUsed: null,
+      costEstimateCny: null,
       sourceFileId: req.fileId,
       requestSummary,
       responseSummary,
@@ -181,12 +187,24 @@ export class AiService {
    * §3.3/§5.6); only the input length is summarized, never the text itself.
    */
   async aiComplete(actor: RequestActor, req: AiCompleteRequest): Promise<AiCompleteResponse> {
+    const outcome = await this.aiCompleteOutcome(actor, req);
+    if (!outcome.ok) throw outcome.error;
+    return outcome.response;
+  }
+
+  /**
+   * Workflow-facing variant that always returns the durable invocation id.
+   * Business workflows need that id even when the provider fails so their
+   * explicit failure state can be correlated without persisting raw prompts.
+   */
+  async aiCompleteOutcome(actor: RequestActor, req: AiCompleteRequest): Promise<AiCompleteOutcome> {
     let result: Awaited<ReturnType<AiProvider['complete']>> | undefined;
     let providerError: unknown;
     try {
       result = await this.ai.complete({
         task: req.task,
         input: req.input,
+        dataClassification: req.dataClassification ?? 'business',
         options: { timeoutMs: req.timeoutMs, maxOutputTokens: req.maxOutputTokens },
       });
     } catch (err) {
@@ -196,7 +214,11 @@ export class AiService {
     const status = providerError ? STATUS_ERROR : STATUS_SUCCESS;
     const requestSummary = { task: req.task, inputLength: req.input.length };
     const responseSummary = result
-      ? { outputLength: result.output.length, tokensUsed: result.tokensUsed }
+      ? {
+          outputLength: result.output.length,
+          tokensUsed: result.tokensUsed,
+          costEstimateCny: result.costEstimateCny ?? null,
+        }
       : { reason: this.failureReason(providerError) };
 
     const row = await this.recordInvocation({
@@ -207,6 +229,7 @@ export class AiService {
       status,
       durationMs: result?.durationMs ?? null,
       tokensUsed: result?.tokensUsed ?? null,
+      costEstimateCny: result?.costEstimateCny ?? null,
       sourceFileId: null,
       requestSummary,
       responseSummary,
@@ -225,11 +248,10 @@ export class AiService {
       },
     });
 
-    if (providerError) {
-      throw providerError;
-    }
+    const invocation = toInvocationSummary(row);
+    if (providerError) return { ok: false, invocation, error: providerError };
     const ok = result as NonNullable<typeof result>;
-    return { invocation: toInvocationSummary(row), output: ok.output };
+    return { ok: true, response: { invocation, output: ok.output } };
   }
 
   async list(
@@ -322,6 +344,9 @@ export class AiService {
   private failureReason(err: unknown): string {
     const name = (err as { constructor?: { name?: string } })?.constructor?.name ?? '';
     if (name.includes('Timeout')) return 'timeout';
+    if (name.includes('RateLimit')) return 'rate_limited';
+    if (name.includes('ResponseParse')) return 'parse_failed';
+    if (name.includes('BudgetExceeded')) return 'budget_exhausted';
     return 'provider_error';
   }
 
@@ -333,6 +358,7 @@ export class AiService {
     status: string;
     durationMs: number | null;
     tokensUsed: number | null;
+    costEstimateCny: number | null;
     sourceFileId: string | null;
     requestSummary: unknown;
     responseSummary: unknown;
@@ -351,9 +377,9 @@ export class AiService {
         const { rows } = await client.query<InvocationRow>(
           `INSERT INTO provider_invocations
              (tenant_id, provider_type, provider_name, action, request_json,
-              response_json, status, duration_ms, tokens_used, source_file_id,
-              invoked_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              response_json, status, duration_ms, tokens_used, cost_estimate,
+              source_file_id, invoked_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            RETURNING id, tenant_id, provider_type, provider_name, action, status,
                      duration_ms, tokens_used, source_file_id, invoked_by, created_at`,
           [
@@ -366,6 +392,7 @@ export class AiService {
             params.status,
             params.durationMs,
             params.tokensUsed,
+            params.costEstimateCny,
             params.sourceFileId,
             params.actor.userId,
           ],

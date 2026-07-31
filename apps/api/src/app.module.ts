@@ -25,6 +25,7 @@ import { SubscriptionModule } from './subscription/subscription.module';
 import { NotificationModule } from './notification/notification.module';
 import { BillingModule } from './billing/billing.module';
 import { SignupModule } from './signup/signup.module';
+import { InquiriesModule } from './inquiries/inquiries.module';
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { SignupModule } from './signup/signup.module';
     NotificationModule,
     BillingModule,
     SignupModule,
+    InquiriesModule,
   ],
 })
 export class AppModule {}
