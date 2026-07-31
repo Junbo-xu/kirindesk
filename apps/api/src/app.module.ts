@@ -28,6 +28,7 @@ import { SignupModule } from './signup/signup.module';
 import { InquiriesModule } from './inquiries/inquiries.module';
 import { WorkbenchModule } from './workbench/workbench.module';
 import { CommercialModule } from './commercial/commercial.module';
+import { ProcurementModule } from './procurement/procurement.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { CommercialModule } from './commercial/commercial.module';
     InquiriesModule,
     WorkbenchModule,
     CommercialModule,
+    ProcurementModule,
   ],
 })
 export class AppModule {}

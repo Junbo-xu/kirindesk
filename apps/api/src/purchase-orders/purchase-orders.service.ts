@@ -17,6 +17,7 @@ import {
   PurchaseOrderNotFoundException,
   OrderSupplierNotFoundException,
   DuplicateOrderNumberException,
+  GeneratedPurchaseOrderImmutableException,
   OrderRequiresLineItemException,
 } from './purchase-orders.errors';
 import {
@@ -71,6 +72,12 @@ export class PurchaseOrdersService {
   // dedicated column in MVP, so it is treated as own (defensive narrowing).
   private restrictsToOwner(dataScope: string): boolean {
     return dataScope === 'own' || dataScope === 'assigned';
+  }
+
+  private response(actor: RequestActor, row: PurchaseOrderRow): PurchaseOrderResponse {
+    const includeSupplierIdentity =
+      row.source_procurement_request_id === null || actor.dataScope === 'all';
+    return toPurchaseOrderResponse(row, includeSupplierIdentity);
   }
 
   // Confirms the supplier exists, is not deleted, belongs to this tenant (RLS)
@@ -279,7 +286,7 @@ export class PurchaseOrdersService {
     }
 
     const itemResponses: OrderItemResponse[] = itemRows.map(toOrderItemResponse);
-    const response = { ...toPurchaseOrderResponse(row), items: itemResponses };
+    const response = { ...this.response(actor, row), items: itemResponses };
 
     await this.safeAudit({
       tenantId: actor.tenantId,
@@ -311,6 +318,9 @@ export class PurchaseOrdersService {
     if (query.supplier_id) {
       params.push(query.supplier_id);
       conditions.push(`supplier_id = $${params.length}`);
+      if (this.restrictsToOwner(actor.dataScope)) {
+        conditions.push('source_procurement_request_id IS NULL');
+      }
     }
     if (query.q) {
       params.push(`%${query.q}%`);
@@ -332,7 +342,7 @@ export class PurchaseOrdersService {
           [...params, pageSize, offset],
         );
         return {
-          data: dataRes.rows.map(toPurchaseOrderResponse),
+          data: dataRes.rows.map((row) => this.response(actor, row)),
           page,
           pageSize,
           total: parseInt(totalRes.rows[0].count, 10),
@@ -372,7 +382,7 @@ export class PurchaseOrdersService {
       async (client) => {
         const row = await this.fetchInScope(client, actor, id);
         const items = await this.fetchItems(client, row.id);
-        return { ...toPurchaseOrderResponse(row), items: items.map(toOrderItemResponse) };
+        return { ...this.response(actor, row), items: items.map(toOrderItemResponse) };
       },
     );
   }
@@ -387,6 +397,9 @@ export class PurchaseOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
+        if (existing.source_procurement_request_id) {
+          throw new GeneratedPurchaseOrderImmutableException();
+        }
         const existingItems = await this.fetchItems(client, existing.id);
 
         // Determine the resulting status to enforce the line-item rule against
@@ -469,11 +482,11 @@ export class PurchaseOrdersService {
     );
 
     const beforeResponse = {
-      ...toPurchaseOrderResponse(before),
+      ...this.response(actor, before),
       items: beforeItems.map(toOrderItemResponse),
     };
     const afterResponse = {
-      ...toPurchaseOrderResponse(after),
+      ...this.response(actor, after),
       items: afterItems.map(toOrderItemResponse),
     };
 
@@ -495,6 +508,9 @@ export class PurchaseOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
+        if (existing.source_procurement_request_id) {
+          throw new GeneratedPurchaseOrderImmutableException();
+        }
         // Soft delete: set deleted_at, bump updated_at, leave status unchanged.
         const { rows } = await client.query<PurchaseOrderRow>(
           `UPDATE purchase_orders SET deleted_at = now(), updated_at = now()
@@ -510,8 +526,8 @@ export class PurchaseOrdersService {
       actorId: actor.userId,
       action: 'purchase_order.deleted',
       resourceId: id,
-      before: toPurchaseOrderResponse(before),
-      after: { ...toPurchaseOrderResponse(after), deleted: true },
+      before: this.response(actor, before),
+      after: { ...this.response(actor, after), deleted: true },
     });
   }
 
@@ -582,6 +598,9 @@ export class PurchaseOrdersService {
           throw new PurchaseOrderNotFoundException();
         }
         const existing = rows[0];
+        if (existing.source_procurement_request_id) {
+          throw new GeneratedPurchaseOrderImmutableException();
+        }
 
         // Validate the legal from -> to transition (409 if illegal).
         const toStatus = assertTransition(action, existing.status);
@@ -625,7 +644,7 @@ export class PurchaseOrdersService {
       },
     );
 
-    const afterResponse = toPurchaseOrderResponse(after);
+    const afterResponse = this.response(actor, after);
 
     await this.safeAudit({
       tenantId: actor.tenantId,
