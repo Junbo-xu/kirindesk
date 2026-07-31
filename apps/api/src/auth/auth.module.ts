@@ -11,6 +11,7 @@ import { requireEnv } from '../common/env';
 import { AuthSessionModule } from '../auth-session/auth-session.module';
 import { LoginRateLimitGuard } from './login-rate-limit.guard';
 import { RedisModule } from '../redis/redis.module';
+import { RbacModule } from '../rbac/rbac.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { RedisModule } from '../redis/redis.module';
     AuditModule,
     AuthSessionModule,
     RedisModule,
+    RbacModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, TenantJwtStrategy, TenantAuthGuard, LoginRateLimitGuard],

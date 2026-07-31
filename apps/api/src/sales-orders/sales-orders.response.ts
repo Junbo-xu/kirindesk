@@ -8,6 +8,8 @@ export interface SalesOrderRow {
   order_number: string;
   pi_number: string | null;
   pi_file_id: string | null;
+  inquiry_id: string | null;
+  source_pi_id: string | null;
   currency: string;
   // pg returns numeric as a string; kept as string end-to-end to avoid
   // floating-point precision loss on money values.
@@ -32,6 +34,8 @@ export interface SalesOrderResponse {
   owner_user_id: string;
   order_number: string;
   pi_number: string | null;
+  inquiry_id: string | null;
+  source_pi_id: string | null;
   currency: string;
   total_amount: string;
   status: string;
@@ -59,6 +63,8 @@ export function toSalesOrderResponse(row: SalesOrderRow): SalesOrderResponse {
     owner_user_id: row.owner_user_id,
     order_number: row.order_number,
     pi_number: row.pi_number,
+    inquiry_id: row.inquiry_id,
+    source_pi_id: row.source_pi_id,
     currency: row.currency,
     total_amount: row.total_amount,
     status: row.status,

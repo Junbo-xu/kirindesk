@@ -4,10 +4,14 @@ import { TenantAuthGuard } from './tenant-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { Request } from 'express';
 import { LoginRateLimit, LoginRateLimitGuard } from './login-rate-limit.guard';
+import { RbacService } from '../rbac/rbac.service';
 
 @Controller('api/auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly rbac: RbacService,
+  ) {}
 
   @Post('login')
   @HttpCode(200)
@@ -39,7 +43,13 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(TenantAuthGuard)
-  me(@CurrentUser() user: { sub: string; tenantId: string; email: string }) {
-    return { id: user.sub, email: user.email, tenantId: user.tenantId };
+  async me(@CurrentUser() user: { sub: string; tenantId: string; email: string }) {
+    const permissions = await this.rbac.listEffectivePermissions(user.sub, user.tenantId);
+    return {
+      id: user.sub,
+      email: user.email,
+      tenantId: user.tenantId,
+      permissions: Object.fromEntries(permissions),
+    };
   }
 }

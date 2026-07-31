@@ -43,3 +43,9 @@ export class OrderRequiresLineItemException extends BadRequestException {
     super('A non-draft order must have at least one line item');
   }
 }
+
+export class PiBackedOrderImmutableException extends ConflictException {
+  constructor() {
+    super('A PI-backed order must be changed through its dedicated workflow');
+  }
+}

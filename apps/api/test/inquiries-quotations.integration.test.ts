@@ -544,7 +544,12 @@ describe('Stage 2A inquiry and quotation workflow (integration)', () => {
     const selected = await request(app.getHttpServer())
       .post(`/api/inquiries/${inquiryId}/selections`)
       .set(bearer(salesToken))
-      .send({ quotation_line_id: line.id, expected_quotation_version: 2 });
+      .send({
+        quotation_line_id: line.id,
+        expected_quotation_version: 2,
+        sales_currency: (currentQuotation.currency as string) ?? 'USD',
+        sales_unit_price: '3.5000',
+      });
     expect(selected.status).toBe(201);
     expect(selected.body.snapshot.line.unit_price).toBe(line.unit_price);
     const serialized = JSON.stringify(selected.body);

@@ -2,6 +2,234 @@ export interface MeResponse {
   id: string;
   email: string;
   tenantId: string;
+  permissions: Record<string, 'all' | 'assigned' | 'own'>;
+}
+
+export interface WorkbenchTask {
+  key: string;
+  label: string;
+  count: number;
+  href: string;
+  urgency: 'normal' | 'high' | 'critical';
+}
+
+export interface WorkbenchSummary {
+  key: string;
+  label: string;
+  value: string | number;
+  amount?: string;
+  currency?: string;
+  href: string;
+}
+
+export interface WorkbenchResponse {
+  generatedAt: string;
+  capabilities: Array<'business' | 'procurement' | 'finance' | 'approver' | 'admin'>;
+  tasks: WorkbenchTask[];
+  summaries: WorkbenchSummary[];
+}
+
+export type BusinessExceptionType =
+  | 'price_variance'
+  | 'quantity_variance'
+  | 'quality_variance'
+  | 'missing_expense'
+  | 'duplicate_customer';
+export type BusinessExceptionStatus = 'open' | 'assigned' | 'in_progress' | 'resolved' | 'closed';
+
+export interface BusinessException {
+  id: string;
+  contextType: string;
+  contextId: string;
+  type: BusinessExceptionType;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  status: BusinessExceptionStatus;
+  summary: string;
+  ownerUserId: string | null;
+  assignedToUserId: string | null;
+  assigneeName: string | null;
+  resolution: string | null;
+  version: number;
+  detectedAt: string;
+  assignedAt: string | null;
+  startedAt: string | null;
+  resolvedAt: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessEvent {
+  id: string;
+  chainType: string;
+  chainId: string;
+  credentialType: string;
+  credentialId: string;
+  eventType: string;
+  actorType: string;
+  actorId: string | null;
+  actorName: string | null;
+  occurredAt: string;
+}
+
+export interface ExceptionAssignee {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface InquiryItemSummary {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string;
+}
+
+export interface InquirySummary {
+  id: string;
+  customer_id: string | null;
+  customer_code: string;
+  customer_country: string;
+  status: string;
+  created_at: string;
+  items: InquiryItemSummary[];
+}
+
+export interface SalesQuotationLine {
+  id: string;
+  inquiry_item_id: string;
+  variant_key: string;
+  variant_value: string;
+  quantity: string;
+  unit_price: string;
+  minimum_quantity: string | null;
+  lead_time_days: number | null;
+}
+
+export interface SalesQuotation {
+  id: string;
+  inquiry_id: string;
+  version: number;
+  currency: Currency;
+  valid_until: string;
+  updated_at: string;
+  lines: SalesQuotationLine[];
+}
+
+export interface CommercialSelection {
+  id: string;
+  inquiry_id: string;
+  inquiry_item_id: string;
+  quotation_version: number;
+  commercial: {
+    sales_currency: Currency;
+    sales_unit_price: string;
+    purchase_to_sales_fx_rate: string;
+    fx_rate_source: string;
+    fx_captured_at: string;
+    purchase_unit_cost: string;
+    gross_profit_unit: string;
+    gross_margin_bps: number;
+    margin_threshold_bps: number;
+    margin_status: 'meets_threshold' | 'below_threshold';
+    margin_formula_version: string;
+    margin_approved: boolean;
+    margin_approved_at: string | null;
+  } | null;
+  snapshot: {
+    currency: Currency;
+    valid_until: string;
+    line: SalesQuotationLine;
+    inquiry_item: InquiryItemSummary & { inquiry_id: string; specifications: string | null };
+  };
+  created_at: string;
+}
+
+export interface ProformaInvoiceItem {
+  id: string;
+  selection_id: string;
+  line_no: number;
+  description: string;
+  specifications: string | null;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+  line_total: string;
+  selection_snapshot: Record<string, unknown>;
+}
+
+export interface ProformaInvoice {
+  id: string;
+  series_id: string;
+  inquiry_id: string;
+  customer_id: string;
+  sales_order_id: string | null;
+  pi_number: string;
+  version: number;
+  currency: Currency;
+  payment_terms: string;
+  status: 'draft' | 'issued' | 'customer_confirmed';
+  total_amount: string;
+  issued_at: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  is_current?: boolean;
+  items: ProformaInvoiceItem[];
+}
+
+export interface CustomerReceipt {
+  id: string;
+  proforma_invoice_id: string;
+  sales_order_id: string;
+  amount: string;
+  currency: Currency;
+  received_at: string;
+  method: 'bank_transfer' | 'cash' | 'card_external' | 'other_external';
+  external_reference: string;
+  proof_file_id: string | null;
+  status: 'recorded' | 'confirmed' | 'rejected';
+  decision_reason: string | null;
+  payment_provider_status: 'not_verified';
+  created_at: string;
+}
+
+export interface ProcurementGate {
+  id: string;
+  sales_order_id: string;
+  proforma_invoice_id: string;
+  status: 'blocked' | 'open' | 'bypassed';
+  order_amount: string;
+  confirmed_amount: string;
+  required_amount: string;
+  currency: Currency;
+  required_ratio_bps: number;
+  proof_required: boolean;
+  config_enabled: boolean;
+  bypass_reason: string | null;
+  blocking_reasons: string[];
+  evaluated_at: string;
+}
+
+export interface CommercialSettings {
+  minimum_margin_bps: number;
+  procurement_gate_enabled: boolean;
+  required_receipt_ratio_bps: number;
+  receipt_proof_required: boolean;
+  bypass_reason: string | null;
+}
+
+export interface QuoteTaskSummary {
+  id: string;
+  inquiry_id: string;
+  customer_country: string;
+  sanitization_status: string;
+  sanitized_summary: string | null;
+  items: Array<{ inquiry_item_id: string; description: string; quantity: string; unit: string }>;
+  last_error_code: string | null;
+  attempt_count: number;
+  updated_at: string;
 }
 
 export interface LoginResponse {
@@ -936,11 +1164,21 @@ export class ApiError extends Error {
   status: number;
   // Field-level validation messages from the global ValidationPipe, when present.
   fields?: string[];
+  code?: string;
+  details?: Record<string, unknown>;
 
-  constructor(status: number, message: string, fields?: string[]) {
+  constructor(
+    status: number,
+    message: string,
+    fields?: string[],
+    code?: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fields = fields;
+    this.code = code;
+    this.details = details;
   }
 }

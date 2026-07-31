@@ -39,6 +39,19 @@ interface SelectionRow {
   quotation_line_id: string;
   quotation_version: number;
   snapshot_json: Record<string, unknown>;
+  sales_currency: string | null;
+  sales_unit_price: string | null;
+  purchase_to_sales_fx_rate: string | null;
+  fx_rate_source: string | null;
+  fx_captured_at: Date | null;
+  purchase_unit_cost: string | null;
+  gross_profit_unit: string | null;
+  gross_margin_bps: number | null;
+  margin_threshold_bps: number | null;
+  margin_status: string | null;
+  margin_formula_version: string | null;
+  margin_approved: boolean;
+  margin_approved_at: Date | null;
   created_at: Date;
 }
 
@@ -58,6 +71,25 @@ interface SupplierIdentity {
 interface PgErrorLike {
   code?: string;
 }
+
+interface MarginCalculation {
+  purchase_unit_cost: string;
+  gross_profit_unit: string;
+  gross_margin_bps: number;
+}
+
+const MARGIN_FORMULA_VERSION = 'gross_margin_bps_v1';
+const DEFAULT_MARGIN_THRESHOLD_BPS = 1500;
+const SELECTION_COLUMNS = `s.id, s.inquiry_id, s.inquiry_item_id, s.quotation_id,
+  s.quotation_line_id, s.quotation_version, s.snapshot_json,
+  s.sales_currency, s.sales_unit_price::text AS sales_unit_price,
+  s.purchase_to_sales_fx_rate::text AS purchase_to_sales_fx_rate,
+  s.fx_rate_source, s.fx_captured_at,
+  s.purchase_unit_cost::text AS purchase_unit_cost,
+  s.gross_profit_unit::text AS gross_profit_unit,
+  s.gross_margin_bps, s.margin_threshold_bps, s.margin_status,
+  s.margin_formula_version, s.created_at,
+  (a.id IS NOT NULL) AS margin_approved, a.created_at AS margin_approved_at`;
 
 function isZeroDecimal(value: string): boolean {
   return /^0+(?:\.0+)?$/.test(value);
@@ -83,6 +115,28 @@ export class QuotationsService {
       [quotationId],
     );
     return result.rows;
+  }
+
+  private async marginThreshold(client: PoolClient): Promise<number> {
+    const result = await client.query<{ threshold: number | null }>(
+      `SELECT (value_json ->> 'minimum_margin_bps')::integer AS threshold
+         FROM tenant_settings
+        WHERE key = 'commercial_workflow'
+        LIMIT 1`,
+    );
+    return result.rows[0]?.threshold ?? DEFAULT_MARGIN_THRESHOLD_BPS;
+  }
+
+  private async selectionById(client: PoolClient, selectionId: string): Promise<SelectionRow> {
+    const result = await client.query<SelectionRow>(
+      `SELECT ${SELECTION_COLUMNS}
+         FROM quote_selection_snapshots s
+         LEFT JOIN quote_selection_margin_approvals a
+           ON a.selection_id = s.id AND a.tenant_id = s.tenant_id
+        WHERE s.id = $1`,
+      [selectionId],
+    );
+    return result.rows[0];
   }
 
   private async task(client: PoolClient, taskId: string, lock = false): Promise<QuoteTaskContext> {
@@ -402,6 +456,23 @@ export class QuotationsService {
       quotation_id: row.quotation_id,
       quotation_line_id: row.quotation_line_id,
       quotation_version: row.quotation_version,
+      commercial: row.sales_currency
+        ? {
+            sales_currency: row.sales_currency,
+            sales_unit_price: row.sales_unit_price,
+            purchase_to_sales_fx_rate: row.purchase_to_sales_fx_rate,
+            fx_rate_source: row.fx_rate_source,
+            fx_captured_at: row.fx_captured_at,
+            purchase_unit_cost: row.purchase_unit_cost,
+            gross_profit_unit: row.gross_profit_unit,
+            gross_margin_bps: row.gross_margin_bps,
+            margin_threshold_bps: row.margin_threshold_bps,
+            margin_status: row.margin_status,
+            margin_formula_version: row.margin_formula_version,
+            margin_approved: row.margin_approved,
+            margin_approved_at: row.margin_approved_at,
+          }
+        : null,
       snapshot: {
         currency: snapshot.currency,
         valid_until: snapshot.valid_until,
@@ -511,6 +582,27 @@ export class QuotationsService {
           if (expiration.rows[0].expired) {
             throw new InquiryStateConflictException('Quotation has expired');
           }
+          if (source.currency !== dto.sales_currency && !dto.purchase_to_sales_fx_rate) {
+            throw new InvalidInquiryDataException(
+              'purchase_to_sales_fx_rate is required when purchase and sales currencies differ',
+            );
+          }
+          const fxRate =
+            source.currency === dto.sales_currency ? '1' : dto.purchase_to_sales_fx_rate!;
+          const calculation = await client.query<MarginCalculation>(
+            `SELECT
+               round($1::numeric * $2::numeric, 4)::text AS purchase_unit_cost,
+               round($3::numeric - round($1::numeric * $2::numeric, 4), 4)::text
+                 AS gross_profit_unit,
+               round(
+                 (($3::numeric - round($1::numeric * $2::numeric, 4)) / $3::numeric) * 10000
+               )::integer AS gross_margin_bps`,
+            [source.line.unit_price, fxRate, dto.sales_unit_price],
+          );
+          const commercial = calculation.rows[0];
+          const threshold = await this.marginThreshold(client);
+          const marginStatus =
+            commercial.gross_margin_bps < threshold ? 'below_threshold' : 'meets_threshold';
           const snapshot = {
             quotation_id: source.quotation_id,
             quotation_version: source.quotation_version,
@@ -521,14 +613,29 @@ export class QuotationsService {
             source_text: source.source_text,
             line: source.line,
             inquiry_item: source.inquiry_item,
+            commercial: {
+              sales_currency: dto.sales_currency,
+              sales_unit_price: dto.sales_unit_price,
+              purchase_to_sales_fx_rate: fxRate,
+              fx_rate_source: source.currency === dto.sales_currency ? 'system' : 'manual',
+              purchase_unit_cost: commercial.purchase_unit_cost,
+              gross_profit_unit: commercial.gross_profit_unit,
+              gross_margin_bps: commercial.gross_margin_bps,
+              margin_threshold_bps: threshold,
+              margin_status: marginStatus,
+              margin_formula_version: MARGIN_FORMULA_VERSION,
+            },
           };
-          const inserted = await client.query<SelectionRow>(
+          const inserted = await client.query<{ id: string }>(
             `INSERT INTO quote_selection_snapshots
                (tenant_id, inquiry_id, inquiry_item_id, quotation_id,
-                quotation_line_id, quotation_version, selected_by, snapshot_json)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING id, inquiry_id, inquiry_item_id, quotation_id,
-                       quotation_line_id, quotation_version, snapshot_json, created_at`,
+                quotation_line_id, quotation_version, selected_by, snapshot_json,
+                sales_currency, sales_unit_price, purchase_to_sales_fx_rate,
+                fx_rate_source, fx_captured_at, purchase_unit_cost, gross_profit_unit,
+                gross_margin_bps, margin_threshold_bps, margin_status, margin_formula_version)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                     $9, $10, $11, $12, now(), $13, $14, $15, $16, $17, $18)
+             RETURNING id`,
             [
               actor.tenantId,
               inquiryId,
@@ -538,21 +645,42 @@ export class QuotationsService {
               source.quotation_version,
               actor.userId,
               JSON.stringify(snapshot),
+              dto.sales_currency,
+              dto.sales_unit_price,
+              fxRate,
+              source.currency === dto.sales_currency ? 'system' : 'manual',
+              commercial.purchase_unit_cost,
+              commercial.gross_profit_unit,
+              commercial.gross_margin_bps,
+              threshold,
+              marginStatus,
+              MARGIN_FORMULA_VERSION,
             ],
           );
-          const response = this.publicSelection(inserted.rows[0]);
+          const insertedRow = await this.selectionById(client, inserted.rows[0].id);
+          const response = this.publicSelection(insertedRow);
           await this.audit.logInTransaction(client, {
             tenantId: actor.tenantId,
             actorType: 'tenant_user',
             actorId: actor.userId,
             action: 'quote_selection.created',
             resourceType: 'quote_selection',
-            resourceId: inserted.rows[0].id,
+            resourceId: insertedRow.id,
             after: {
               inquiry_id: inquiryId,
               inquiry_item_id: source.line.inquiry_item_id,
               quotation_id: source.quotation_id,
               quotation_version: source.quotation_version,
+              commercial: {
+                sales_currency: dto.sales_currency,
+                sales_unit_price: dto.sales_unit_price,
+                purchase_unit_cost: commercial.purchase_unit_cost,
+                gross_profit_unit: commercial.gross_profit_unit,
+                gross_margin_bps: commercial.gross_margin_bps,
+                margin_threshold_bps: threshold,
+                margin_status: marginStatus,
+                margin_formula_version: MARGIN_FORMULA_VERSION,
+              },
             },
           });
           const counts = await client.query<{ item_count: string; selection_count: string }>(
@@ -596,11 +724,12 @@ export class QuotationsService {
         );
         if (inquiry.rows.length === 0) throw new InquiryNotFoundException();
         const rows = await client.query<SelectionRow>(
-          `SELECT id, inquiry_id, inquiry_item_id, quotation_id,
-                  quotation_line_id, quotation_version, snapshot_json, created_at
-             FROM quote_selection_snapshots
-            WHERE inquiry_id = $1
-            ORDER BY created_at ASC, id ASC`,
+          `SELECT ${SELECTION_COLUMNS}
+             FROM quote_selection_snapshots s
+             LEFT JOIN quote_selection_margin_approvals a
+               ON a.selection_id = s.id AND a.tenant_id = s.tenant_id
+            WHERE s.inquiry_id = $1
+            ORDER BY s.created_at ASC, s.id ASC`,
           [inquiryId],
         );
         return rows.rows.map((row) => this.publicSelection(row));

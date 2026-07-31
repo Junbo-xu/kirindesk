@@ -14,6 +14,7 @@ export interface InquiryRow {
   id: string;
   tenant_id: string;
   owner_user_id: string;
+  customer_id: string | null;
   customer_code: string;
   customer_country: string;
   customer_message: string;
@@ -27,6 +28,7 @@ export interface InquiryRow {
 export interface InquiryResponse {
   id: string;
   owner_user_id: string;
+  customer_id: string | null;
   customer_code: string;
   customer_country: string;
   customer_message: string;
@@ -42,6 +44,7 @@ export function toInquiryResponse(row: InquiryRow, items: InquiryItemRow[]): Inq
   return {
     id: row.id,
     owner_user_id: row.owner_user_id,
+    customer_id: row.customer_id,
     customer_code: row.customer_code,
     customer_country: row.customer_country,
     customer_message: row.customer_message,

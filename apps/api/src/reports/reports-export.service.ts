@@ -8,6 +8,7 @@ import {
   ExportFile,
   ExportFormat,
   exportTimestamp,
+  exportWatermarkRows,
   num,
   txt,
   serializeCsv,
@@ -60,12 +61,17 @@ export class ReportsExportService {
         ? await this.reports.salesSummary(actor, query)
         : await this.reports.purchaseSummary(actor, query);
 
-    const body = serializeCsv(this.buildRows(side, summary));
+    const exportedAt = new Date();
+    const body = serializeCsv([
+      ...exportWatermarkRows(actor, exportedAt),
+      BLANK_ROW,
+      ...this.buildRows(side, summary),
+    ]);
     const format: ExportFormat = query.format ?? 'csv';
 
     const from = query.from.slice(0, 10);
     const to = query.to.slice(0, 10);
-    const filename = `report-${side}_${summary.caliber}_${from}_${to}_${exportTimestamp()}.${format}`;
+    const filename = `report-${side}_${summary.caliber}_${from}_${to}_${exportTimestamp(exportedAt)}.${format}`;
 
     // Audit BEFORE returning the bytes (fail-closed, plan §5.2): if the audit
     // write throws, this propagates and the controller never sends the file —

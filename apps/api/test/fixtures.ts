@@ -132,6 +132,16 @@ export const SUPPORT_ACCESS_PERMS = [
 // an invoice. In SEED_PERMS so admin/sales roles hold them; the no-role user
 // lacks them for the 403 case.
 export const BILLING_PERMS = ['billing:view', 'billing:pay'] as const;
+export const FINANCE_PERMS = ['finance:view'] as const;
+
+export const WORKBENCH_PERMS = [
+  'workbench:view',
+  'business_events:view',
+  'business_exceptions:view',
+  'business_exceptions:assign',
+  'business_exceptions:resolve',
+  'business_exceptions:close',
+] as const;
 
 export const INQUIRY_PERMS = [
   'inquiries:view',
@@ -153,6 +163,27 @@ const STAGE_2A_PERMS: { code: string; moduleId: string }[] = [
   { code: 'quotations:audit', moduleId: SYSTEM_MODULE_ID },
 ];
 
+export const PROFORMA_INVOICE_PERMS = [
+  'proforma_invoices:view',
+  'proforma_invoices:create',
+  'proforma_invoices:issue',
+  'proforma_invoices:confirm',
+  'proforma_invoices:export',
+] as const;
+export const CUSTOMER_RECEIPT_PERMS = [
+  'customer_receipts:view',
+  'customer_receipts:record',
+  'customer_receipts:review',
+] as const;
+export const PROCUREMENT_GATE_PERMS = ['procurement_gate:view'] as const;
+
+const STAGE_2B_PERMS: { code: string; moduleId: string }[] = [
+  { code: 'quote_selections:approve_margin', moduleId: ORDERS_MODULE_ID },
+  ...PROFORMA_INVOICE_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+  ...CUSTOMER_RECEIPT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...PROCUREMENT_GATE_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+];
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -164,6 +195,9 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...BILLING_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...FINANCE_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...WORKBENCH_PERMS.slice(0, 2).map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
+  ...WORKBENCH_PERMS.slice(2).map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
   ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
   ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
@@ -309,6 +343,15 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    for (const { code, moduleId } of STAGE_2B_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
     // Support-access permission rows (system module). Inserted so they exist,
     // but granted selectively below — NOT via the all-roles loop.
     for (const code of SUPPORT_ACCESS_PERMS) {
@@ -358,6 +401,29 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
           : STAGE_2A_PERMS.map(({ code }) => code);
       for (const permission of stage2aPermissionRows.rows) {
         if (!allowedCodes.includes(permission.code as (typeof allowedCodes)[number])) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
+        );
+      }
+    }
+
+    const stage2bPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2B_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const salesCodes: string[] = [
+        ...PROFORMA_INVOICE_PERMS,
+        'customer_receipts:view',
+        'customer_receipts:record',
+        ...PROCUREMENT_GATE_PERMS,
+      ];
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID ? salesCodes : STAGE_2B_PERMS.map(({ code }) => code);
+      for (const permission of stage2bPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code)) continue;
         await client.query(
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,

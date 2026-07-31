@@ -50,7 +50,7 @@ interface SanitizationSource {
 
 const SANITIZATION_LEASE_MINUTES = 2;
 
-const INQUIRY_COLUMNS = `id, tenant_id, owner_user_id, customer_code, customer_country,
+const INQUIRY_COLUMNS = `id, tenant_id, owner_user_id, customer_id, customer_code, customer_country,
   customer_message, source_version, status, submitted_at, created_at, updated_at`;
 
 const ITEM_COLUMNS = `id, inquiry_id, line_no, description, specifications,

@@ -31,6 +31,9 @@ describe('ReportsExportService', () => {
     expect(file.mime).toBe('text/csv; charset=utf-8');
     expect(file.body[0]).toBe(0xef); // BOM
     const text = file.body.toString('utf8');
+    expect(text).toContain('KirinDesk 授权导出');
+    expect(text).toContain(ACTOR.tenantId);
+    expect(text).toContain(ACTOR.userId);
     expect(text).toContain('草稿');
     expect(text).toContain('合计');
 

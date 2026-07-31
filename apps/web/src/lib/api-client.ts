@@ -68,6 +68,20 @@ import {
   ListSupportGrantsQuery,
   SignupInput,
   SignupResult,
+  BusinessEvent,
+  BusinessException,
+  BusinessExceptionStatus,
+  BusinessExceptionType,
+  CommercialSelection,
+  CommercialSettings,
+  CustomerReceipt,
+  ExceptionAssignee,
+  InquirySummary,
+  ProcurementGate,
+  ProformaInvoice,
+  QuoteTaskSummary,
+  SalesQuotation,
+  WorkbenchResponse,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -134,8 +148,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 async function toApiError(res: Response): Promise<ApiError> {
   let message = `请求失败 (${res.status})`;
   let fields: string[] | undefined;
+  let code: string | undefined;
+  let details: Record<string, unknown> | undefined;
   try {
     const data = await res.json();
+    if (data && typeof data === 'object') {
+      details = data as Record<string, unknown>;
+      if (typeof data.code === 'string') code = data.code;
+    }
     if (Array.isArray(data?.message)) {
       fields = data.message as string[];
       message = fields.join('；');
@@ -145,7 +165,7 @@ async function toApiError(res: Response): Promise<ApiError> {
   } catch {
     // non-JSON body; keep the default message
   }
-  return new ApiError(res.status, message, fields);
+  return new ApiError(res.status, message, fields, code, details);
 }
 
 // Pulls the filename from a Content-Disposition header: prefer the RFC 5987
@@ -207,6 +227,212 @@ export const apiClient = {
   },
   getMe(): Promise<MeResponse> {
     return request<MeResponse>('/api/auth/me');
+  },
+  getWorkbench(): Promise<WorkbenchResponse> {
+    return request<WorkbenchResponse>('/api/workbench');
+  },
+  listBusinessEvents(
+    query: {
+      chainType?: string;
+      chainId?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ): Promise<Paginated<BusinessEvent>> {
+    const params = new URLSearchParams();
+    if (query.chainType) params.set('chainType', query.chainType);
+    if (query.chainId) params.set('chainId', query.chainId);
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<BusinessEvent>>(`/api/business-events${qs ? `?${qs}` : ''}`);
+  },
+  listBusinessExceptions(
+    query: {
+      type?: BusinessExceptionType;
+      status?: BusinessExceptionStatus;
+      assigneeUserId?: string;
+      page?: number;
+      pageSize?: number;
+    } = {},
+  ): Promise<Paginated<BusinessException>> {
+    const params = new URLSearchParams();
+    if (query.type) params.set('type', query.type);
+    if (query.status) params.set('status', query.status);
+    if (query.assigneeUserId) params.set('assigneeUserId', query.assigneeUserId);
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<BusinessException>>(`/api/business-exceptions${qs ? `?${qs}` : ''}`);
+  },
+  listExceptionAssignees(): Promise<ExceptionAssignee[]> {
+    return request<ExceptionAssignee[]>('/api/business-exceptions/assignees');
+  },
+  assignBusinessException(
+    id: string,
+    assigneeUserId: string,
+    expectedVersion: number,
+  ): Promise<BusinessException> {
+    return request<BusinessException>(`/api/business-exceptions/${id}/assign`, {
+      method: 'POST',
+      body: { assigneeUserId, expectedVersion },
+    });
+  },
+  startBusinessException(id: string, expectedVersion: number): Promise<BusinessException> {
+    return request<BusinessException>(`/api/business-exceptions/${id}/start`, {
+      method: 'POST',
+      body: { expectedVersion },
+    });
+  },
+  resolveBusinessException(
+    id: string,
+    resolution: string,
+    expectedVersion: number,
+  ): Promise<BusinessException> {
+    return request<BusinessException>(`/api/business-exceptions/${id}/resolve`, {
+      method: 'POST',
+      body: { resolution, expectedVersion },
+    });
+  },
+  closeBusinessException(id: string, expectedVersion: number): Promise<BusinessException> {
+    return request<BusinessException>(`/api/business-exceptions/${id}/close`, {
+      method: 'POST',
+      body: { expectedVersion },
+    });
+  },
+  listInquiries(): Promise<InquirySummary[]> {
+    return request<InquirySummary[]>('/api/inquiries');
+  },
+  getInquiry(id: string): Promise<InquirySummary> {
+    return request<InquirySummary>(`/api/inquiries/${id}`);
+  },
+  listSalesQuotations(id: string): Promise<SalesQuotation[]> {
+    return request<SalesQuotation[]>(`/api/inquiries/${id}/quotations`);
+  },
+  listSelections(id: string): Promise<CommercialSelection[]> {
+    return request<CommercialSelection[]>(`/api/inquiries/${id}/selections`);
+  },
+  selectQuotation(
+    inquiryId: string,
+    input: {
+      quotation_line_id: string;
+      expected_quotation_version: number;
+      sales_currency: Currency;
+      sales_unit_price: string;
+      purchase_to_sales_fx_rate?: string;
+    },
+  ): Promise<CommercialSelection> {
+    return request<CommercialSelection>(`/api/inquiries/${inquiryId}/selections`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  upgradeInquiryCustomer(
+    inquiryId: string,
+    input: {
+      company_name: string;
+      contact_name?: string;
+      email?: string;
+      phone?: string;
+      country?: string;
+    },
+  ): Promise<CustomerResponse> {
+    return request<CustomerResponse>(`/api/inquiries/${inquiryId}/customer-upgrade`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  linkInquiryCustomer(inquiryId: string, customerId: string): Promise<CustomerResponse> {
+    return request<CustomerResponse>(`/api/inquiries/${inquiryId}/customer-link`, {
+      method: 'PUT',
+      body: { customer_id: customerId },
+    });
+  },
+  approveSelectionMargin(selectionId: string, reason: string): Promise<unknown> {
+    return request(`/api/quote-selections/${selectionId}/margin-approval`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+  listProformaInvoices(inquiryId: string): Promise<ProformaInvoice[]> {
+    return request<ProformaInvoice[]>(`/api/inquiries/${inquiryId}/proforma-invoices`);
+  },
+  createProformaInvoice(
+    inquiryId: string,
+    selectionIds: string[],
+    paymentTerms: string,
+  ): Promise<ProformaInvoice> {
+    return request<ProformaInvoice>(`/api/inquiries/${inquiryId}/proforma-invoices`, {
+      method: 'POST',
+      body: { selection_ids: selectionIds, payment_terms: paymentTerms },
+    });
+  },
+  reviseProformaInvoice(id: string, paymentTerms: string): Promise<ProformaInvoice> {
+    return request<ProformaInvoice>(`/api/proforma-invoices/${id}/revisions`, {
+      method: 'POST',
+      body: { payment_terms: paymentTerms },
+    });
+  },
+  issueProformaInvoice(id: string): Promise<ProformaInvoice> {
+    return request<ProformaInvoice>(`/api/proforma-invoices/${id}/issue`, { method: 'POST' });
+  },
+  confirmProformaInvoice(id: string): Promise<{
+    proforma_invoice: ProformaInvoice;
+    sales_order: SalesOrderResponse;
+    procurement_gate: ProcurementGate;
+  }> {
+    return request(`/api/proforma-invoices/${id}/customer-confirm`, { method: 'POST' });
+  },
+  exportProformaInvoice(id: string): Promise<{ blob: Blob; filename: string }> {
+    return downloadBlob(`/api/proforma-invoices/${id}/export`);
+  },
+  listCustomerReceipts(orderId: string): Promise<CustomerReceipt[]> {
+    return request<CustomerReceipt[]>(`/api/sales-orders/${orderId}/customer-receipts`);
+  },
+  recordCustomerReceipt(
+    orderId: string,
+    input: {
+      amount: string;
+      currency: Currency;
+      received_at: string;
+      method: CustomerReceipt['method'];
+      external_reference: string;
+      proof_file_id?: string;
+      note?: string;
+    },
+  ): Promise<{ receipt: CustomerReceipt; procurement_gate: ProcurementGate }> {
+    return request(`/api/sales-orders/${orderId}/customer-receipts`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  reviewCustomerReceipt(
+    id: string,
+    decision: 'confirmed' | 'rejected',
+    reason?: string,
+  ): Promise<{ receipt: CustomerReceipt; procurement_gate: ProcurementGate }> {
+    return request(`/api/customer-receipts/${id}/review`, {
+      method: 'POST',
+      body: { decision, reason },
+    });
+  },
+  getProcurementGate(orderId: string): Promise<ProcurementGate> {
+    return request<ProcurementGate>(`/api/sales-orders/${orderId}/procurement-gate`);
+  },
+  getCommercialSettings(): Promise<CommercialSettings> {
+    return request<CommercialSettings>('/api/commercial-settings');
+  },
+  updateCommercialSettings(input: CommercialSettings): Promise<CommercialSettings> {
+    return request<CommercialSettings>('/api/commercial-settings', {
+      method: 'PUT',
+      body: input,
+    });
+  },
+  submitInquiry(id: string): Promise<{ inquiry: InquirySummary }> {
+    return request<{ inquiry: InquirySummary }>(`/api/inquiries/${id}/submit`, { method: 'POST' });
+  },
+  listQuoteTasks(): Promise<QuoteTaskSummary[]> {
+    return request<QuoteTaskSummary[]>('/api/quote-tasks');
   },
   logout(): Promise<{ message: string }> {
     return request<{ message: string }>('/api/auth/logout', { method: 'POST' });

@@ -18,6 +18,7 @@ import {
   OrderCustomerNotFoundException,
   DuplicateOrderNumberException,
   OrderRequiresLineItemException,
+  PiBackedOrderImmutableException,
 } from './sales-orders.errors';
 import { SalesOrderRow, SalesOrderResponse, toSalesOrderResponse } from './sales-orders.response';
 import { computeLineTotal, sumMoney, multiplyMoneyByRate } from '../common/order-money';
@@ -383,6 +384,7 @@ export class SalesOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
+        if (existing.source_pi_id) throw new PiBackedOrderImmutableException();
         const existingItems = await this.fetchItems(client, existing.id);
 
         // Determine the resulting status to enforce the line-item rule against
@@ -493,6 +495,7 @@ export class SalesOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
+        if (existing.source_pi_id) throw new PiBackedOrderImmutableException();
         // Soft delete: set deleted_at, bump updated_at, leave status unchanged.
         const { rows } = await client.query<SalesOrderRow>(
           `UPDATE sales_orders SET deleted_at = now(), updated_at = now()
@@ -577,6 +580,7 @@ export class SalesOrdersService {
           throw new SalesOrderNotFoundException();
         }
         const existing = rows[0];
+        if (existing.source_pi_id) throw new PiBackedOrderImmutableException();
 
         // Validate the legal from -> to transition (409 if illegal).
         const toStatus = assertTransition(action, existing.status);

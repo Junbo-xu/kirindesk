@@ -26,6 +26,8 @@ import { NotificationModule } from './notification/notification.module';
 import { BillingModule } from './billing/billing.module';
 import { SignupModule } from './signup/signup.module';
 import { InquiriesModule } from './inquiries/inquiries.module';
+import { WorkbenchModule } from './workbench/workbench.module';
+import { CommercialModule } from './commercial/commercial.module';
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { InquiriesModule } from './inquiries/inquiries.module';
     BillingModule,
     SignupModule,
     InquiriesModule,
+    WorkbenchModule,
+    CommercialModule,
   ],
 })
 export class AppModule {}

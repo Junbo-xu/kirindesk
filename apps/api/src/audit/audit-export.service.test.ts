@@ -33,7 +33,10 @@ describe('AuditExportService', () => {
     const text = file.body.toString('utf8');
 
     expect(file.filename).toMatch(/^audit-logs_all_all_\d{8}T\d{6}Z\.csv$/);
-    expect(text.split('\r\n')[0]).toBe('\uFEFF时间,操作者,操作者类型,动作,资源类型,资源ID,事件ID');
+    expect(text.split('\r\n')[0]).toBe('\uFEFF水印,KirinDesk 授权导出，禁止未授权转发');
+    expect(text).toContain('时间,操作者,操作者类型,动作,资源类型,资源ID,事件ID');
+    expect(text).toContain(ACTOR.tenantId);
+    expect(text).toContain(ACTOR.userId);
     // ISO 8601 UTC time + no leaked snapshot/chain columns.
     expect(text).toContain('2026-06-25T13:21:28.182Z');
     for (const forbidden of [
