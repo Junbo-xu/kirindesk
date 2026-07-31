@@ -4,6 +4,8 @@ import type { INestApplication } from '@nestjs/common';
 import type { Pool } from 'pg';
 import pg from 'pg';
 import request from 'supertest';
+import { createHash, randomUUID } from 'node:crypto';
+import { JwtService } from '@nestjs/jwt';
 import { closePool, verifyChain } from '@kirindesk/database';
 import { AppModule } from '../src/app.module';
 import { APP_POOL } from '../src/database/database.module';
@@ -12,7 +14,11 @@ import {
   TEST_TENANT_SLUG,
   TEST_USER_EMAIL,
   TEST_ADMIN_EMAIL,
+  TEST_ADMIN_ID,
   TEST_PASSWORD,
+  TEST_TENANT2_ID,
+  TEST_USER_ID,
+  TEST_USER3_ID,
 } from './fixtures';
 
 const { Client } = pg;
@@ -53,6 +59,7 @@ describe('Auth smoke + audit (integration)', () => {
       .set('Authorization', `Bearer ${tenantToken}`);
     expect(res.status).toBe(200);
     expect(res.body.email).toBe(TEST_USER_EMAIL);
+    expect(Object.keys(res.body).sort()).toEqual(['email', 'id', 'tenantId']);
   });
 
   it('platform login with correct credentials returns 200 + accessToken', async () => {
@@ -70,6 +77,7 @@ describe('Auth smoke + audit (integration)', () => {
       .set('Authorization', `Bearer ${platformToken}`);
     expect(res.status).toBe(200);
     expect(res.body.email).toBe(TEST_ADMIN_EMAIL);
+    expect(Object.keys(res.body).sort()).toEqual(['email', 'id']);
   });
 
   it('tenant token cannot access platform /me (401)', async () => {
@@ -84,6 +92,167 @@ describe('Auth smoke + audit (integration)', () => {
       .get('/api/auth/me')
       .set('Authorization', `Bearer ${platformToken}`);
     expect(res.status).toBe(401);
+  });
+
+  it('tenant logout revokes the server-side session immediately', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '2001:db8::100')
+      .send({ email: TEST_USER_EMAIL, password: TEST_PASSWORD, tenantSlug: TEST_TENANT_SLUG });
+    expect(login.status).toBe(200);
+
+    const token = login.body.accessToken as string;
+    const logout = await request(app.getHttpServer())
+      .post('/api/auth/logout')
+      .set('Authorization', `Bearer ${token}`);
+    expect(logout.status).toBe(200);
+
+    const after = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${token}`);
+    expect(after.status).toBe(401);
+  });
+
+  it('platform logout revokes the server-side session immediately', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/platform-auth/login')
+      .set('X-Forwarded-For', '2001:db8::101')
+      .send({ email: TEST_ADMIN_EMAIL, password: TEST_PASSWORD });
+    expect(login.status).toBe(200);
+
+    const token = login.body.accessToken as string;
+    const logout = await request(app.getHttpServer())
+      .post('/api/platform-auth/logout')
+      .set('Authorization', `Bearer ${token}`);
+    expect(logout.status).toBe(200);
+
+    const after = await request(app.getHttpServer())
+      .get('/api/platform-auth/me')
+      .set('Authorization', `Bearer ${token}`);
+    expect(after.status).toBe(401);
+  });
+
+  it('an active token becomes invalid immediately when the account is disabled', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '2001:db8::102')
+      .send({ email: TEST_USER_EMAIL, password: TEST_PASSWORD, tenantSlug: TEST_TENANT_SLUG });
+    expect(login.status).toBe(200);
+
+    await withAdmin((client) =>
+      client.query(`UPDATE users SET status = 'inactive' WHERE id = $1`, [TEST_USER_ID]),
+    );
+    try {
+      const after = await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${login.body.accessToken as string}`);
+      expect(after.status).toBe(401);
+    } finally {
+      await withAdmin((client) =>
+        client.query(`UPDATE users SET status = 'active' WHERE id = $1`, [TEST_USER_ID]),
+      );
+    }
+  });
+
+  it('an active token becomes invalid immediately when the tenant is disabled', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '2001:db8::104')
+      .send({ email: TEST_USER_EMAIL, password: TEST_PASSWORD, tenantSlug: TEST_TENANT_SLUG });
+    expect(login.status).toBe(200);
+
+    await withAdmin((client) =>
+      client.query(`UPDATE tenants SET status = 'suspended' WHERE id = $1`, [TEST_TENANT_ID]),
+    );
+    try {
+      const after = await request(app.getHttpServer())
+        .get('/api/auth/me')
+        .set('Authorization', `Bearer ${login.body.accessToken as string}`);
+      expect(after.status).toBe(403);
+      expect(after.body.message).toBe('租户已停用');
+    } finally {
+      await withAdmin((client) =>
+        client.query(`UPDATE tenants SET status = 'active' WHERE id = $1`, [TEST_TENANT_ID]),
+      );
+    }
+  });
+
+  it('an active platform token becomes invalid immediately when the admin is disabled', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/platform-auth/login')
+      .set('X-Forwarded-For', '2001:db8::105')
+      .send({ email: TEST_ADMIN_EMAIL, password: TEST_PASSWORD });
+    expect(login.status).toBe(200);
+
+    await withAdmin((client) =>
+      client.query(`UPDATE platform_admins SET status = 'inactive' WHERE id = $1`, [TEST_ADMIN_ID]),
+    );
+    try {
+      const after = await request(app.getHttpServer())
+        .get('/api/platform-auth/me')
+        .set('Authorization', `Bearer ${login.body.accessToken as string}`);
+      expect(after.status).toBe(401);
+    } finally {
+      await withAdmin((client) =>
+        client.query(`UPDATE platform_admins SET status = 'active' WHERE id = $1`, [TEST_ADMIN_ID]),
+      );
+    }
+  });
+
+  it('a session id cannot be replayed as another tenant or user', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .set('X-Forwarded-For', '2001:db8::103')
+      .send({ email: TEST_USER_EMAIL, password: TEST_PASSWORD, tenantSlug: TEST_TENANT_SLUG });
+    expect(login.status).toBe(200);
+
+    const jwt = new JwtService({ secret: process.env.TENANT_JWT_SECRET });
+    const original = jwt.decode(login.body.accessToken as string) as { sid: string };
+    const forged = jwt.sign(
+      {
+        sub: TEST_USER3_ID,
+        type: 'tenant_user',
+        tenantId: TEST_TENANT2_ID,
+        email: 'forged@test.local',
+        sid: original.sid,
+      },
+      { expiresIn: '5m' },
+    );
+
+    const response = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set('Authorization', `Bearer ${forged}`);
+    expect(response.status).toBe(401);
+  });
+
+  it('tenant login is rate limited by both IP and normalized identity', async () => {
+    const previousMax = process.env.LOGIN_RATE_LIMIT_MAX;
+    process.env.LOGIN_RATE_LIMIT_MAX = '2';
+    const marker = randomUUID();
+    const email = `${marker}@missing.test`;
+    const ip = `2001:db8::${createHash('sha256').update(marker).digest('hex').slice(0, 4)}`;
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .set('X-Forwarded-For', ip)
+          .send({ email, password: 'wrong-password', tenantSlug: TEST_TENANT_SLUG });
+        expect(response.status).toBe(401);
+      }
+
+      const limited = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .set('X-Forwarded-For', ip)
+        .send({ email, password: 'wrong-password', tenantSlug: TEST_TENANT_SLUG });
+      expect(limited.status).toBe(429);
+      expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+    } finally {
+      if (previousMax === undefined) {
+        delete process.env.LOGIN_RATE_LIMIT_MAX;
+      } else {
+        process.env.LOGIN_RATE_LIMIT_MAX = previousMax;
+      }
+    }
   });
 
   it('tenant login with wrong password returns 401 Invalid credentials', async () => {
@@ -125,6 +294,7 @@ describe('Auth smoke + audit (integration)', () => {
     const actions = rows.map((r) => r.action);
     expect(actions).toContain('auth:login_success');
     expect(actions).toContain('auth:login_failed');
+    expect(actions).toContain('auth:login_rate_limited');
   });
 
   it('platform login_success is written with tenant_id NULL', async () => {

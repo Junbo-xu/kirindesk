@@ -358,7 +358,7 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
     await client.query(
       `INSERT INTO tenant_quota_usage (tenant_id, user_count, storage_bytes, ai_calls_month, ai_calls_reset_at, updated_at)
        VALUES
-         ($1, 1, 0, 0, date_trunc('month', now()), now()),
+         ($1, 3, 0, 0, date_trunc('month', now()), now()),
          ($2, 1, 0, 0, date_trunc('month', now()), now())`,
       [TEST_TENANT_ID, TEST_TENANT2_ID],
     );

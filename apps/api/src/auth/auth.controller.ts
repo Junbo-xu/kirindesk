@@ -1,19 +1,18 @@
 import { Controller, Post, Get, Body, Req, UseGuards, HttpCode } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { TenantAuthGuard } from './tenant-auth.guard';
-import { AuditService } from '../audit/audit.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { Request } from 'express';
+import { LoginRateLimit, LoginRateLimitGuard } from './login-rate-limit.guard';
 
 @Controller('api/auth')
 export class AuthController {
-  constructor(
-    private readonly authService: AuthService,
-    private readonly auditService: AuditService,
-  ) {}
+  constructor(private readonly authService: AuthService) {}
 
   @Post('login')
   @HttpCode(200)
+  @UseGuards(LoginRateLimitGuard)
+  @LoginRateLimit('tenant')
   async login(
     @Body() body: { email: string; password: string; tenantSlug: string },
     @Req() req: Request,
@@ -27,16 +26,13 @@ export class AuthController {
   @Post('logout')
   @UseGuards(TenantAuthGuard)
   @HttpCode(200)
-  async logout(@CurrentUser() user: { sub: string; tenantId: string }, @Req() req: Request) {
-    await this.auditService.log({
-      tenantId: user.tenantId,
-      actorType: 'tenant_user',
-      actorId: user.sub,
-      action: 'auth:logout',
-      resourceType: 'user',
-      resourceId: user.sub,
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent'],
+  async logout(
+    @CurrentUser() user: { sub: string; tenantId: string; sid: string },
+    @Req() req: Request,
+  ) {
+    await this.authService.logout(user, {
+      ip: req.ip,
+      ua: req.headers['user-agent'],
     });
     return { message: 'Logged out' };
   }

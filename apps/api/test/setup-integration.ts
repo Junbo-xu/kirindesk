@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { beforeAll } from 'vitest';
 import pg from 'pg';
+import Redis from 'ioredis';
 import { seedFixture, TEST_DB } from './fixtures';
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,10 @@ const MAINTENANCE_URL = TEST_DATABASE_URL.replace(/\/[^/]+$/, '/postgres');
 // APP_DATABASE_URL exclusively.
 process.env.TENANT_JWT_SECRET = 'test-tenant-jwt-secret';
 process.env.PLATFORM_JWT_SECRET = 'test-platform-jwt-secret';
+process.env.REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379/1';
+process.env.LOGIN_RATE_LIMIT_MAX = process.env.LOGIN_RATE_LIMIT_MAX ?? '100';
+process.env.LOGIN_RATE_LIMIT_WINDOW_SEC = process.env.LOGIN_RATE_LIMIT_WINDOW_SEC ?? '900';
+process.env.TRUST_PROXY = 'true';
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.APP_DATABASE_URL = TEST_APP_DATABASE_URL;
 // Injected into migration 000 when the fresh test DB is migrated below.
@@ -74,7 +79,24 @@ async function assertOnTestDatabase(): Promise<void> {
   }
 }
 
+async function resetTestRedis(): Promise<void> {
+  const redisUrl = process.env.REDIS_URL;
+  if (!redisUrl) throw new Error('REDIS_URL is required for integration tests.');
+  const databaseNumber = new URL(redisUrl).pathname;
+  if (databaseNumber !== '/1') {
+    throw new Error(`Refusing to flush Redis database "${databaseNumber || '/0'}"; expected "/1".`);
+  }
+
+  const redis = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+  try {
+    await redis.flushdb();
+  } finally {
+    redis.disconnect(false);
+  }
+}
+
 beforeAll(async () => {
+  await resetTestRedis();
   await recreateTestDatabase();
   await assertOnTestDatabase();
   // Apply migrations 000-023 to the freshly created test database. DATABASE_URL

@@ -23,7 +23,7 @@ import net from 'node:net';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 const API_MAIN = resolve(ROOT, 'apps/api/dist/main.js');
-const API_PORT = 3001;
+const API_PORT = Number(process.env.SECURITY_TEST_API_PORT ?? 39001);
 
 // pg lives under apps/api (pnpm isolates node_modules); resolve it from there.
 const apiRequire = createRequire(resolve(ROOT, 'apps/api/package.json'));
@@ -90,6 +90,22 @@ function staticChecks() {
     tracked = '';
   }
   record('static: .env is not git-tracked', tracked === '', tracked);
+
+  const placeholderGates = grep("echo 'no ", ['package.json', 'apps', 'packages'], [
+    '--include=package.json',
+  ]);
+  record(
+    'static: workspace quality gates contain no echo placeholders',
+    placeholderGates.length === 0,
+    placeholderGates.join(' | '),
+  );
+
+  const asyncQuota = grep('void this.quota', ['apps/api/src'], ['--include=*.ts']);
+  record(
+    'static: quota mutations are not fire-and-forget',
+    asyncQuota.length === 0,
+    asyncQuota.join(' | '),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +134,11 @@ function baseEnv() {
     PLATFORM_JWT_SECRET: 'test-platform-jwt-secret',
     APP_DATABASE_URL: APP_URL,
     API_PORT: String(API_PORT),
+    S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://127.0.0.1:9000',
+    S3_REGION: process.env.S3_REGION ?? 'us-east-1',
+    S3_BUCKET: process.env.S3_BUCKET ?? 'kirindesk-files-test',
+    S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ?? 'test-access-key',
+    S3_SECRET_KEY: process.env.S3_SECRET_KEY ?? 'test-secret-key',
   };
 }
 
@@ -240,6 +261,43 @@ async function dbChecks() {
     } catch (err) {
       record('db: UPDATE audit_logs is denied for app role', isPermissionDenied(err), err.code);
     }
+  });
+
+  await withAppClient(async (client) => {
+    const { rows } = await client.query(`SELECT count(*)::int AS n FROM auth_sessions`);
+    record(
+      'db: SELECT auth_sessions with no tenant context returns 0 rows',
+      rows[0].n === 0,
+      `n=${rows[0].n}`,
+    );
+  });
+
+  await withAppClient(async (client) => {
+    await client.query(`SELECT set_config('app.current_tenant_id', $1, false)`, [WRONG_TENANT_ID]);
+    const { rows } = await client.query(`SELECT count(*)::int AS n FROM auth_sessions`);
+    record(
+      'db: SELECT auth_sessions with wrong tenant context returns 0 rows',
+      rows[0].n === 0,
+      `n=${rows[0].n}`,
+    );
+  });
+
+  await withAppClient(async (client) => {
+    try {
+      await client.query(`DELETE FROM auth_sessions`);
+      record('db: DELETE auth_sessions is denied for app role', false, 'DELETE unexpectedly succeeded');
+    } catch (err) {
+      record('db: DELETE auth_sessions is denied for app role', isPermissionDenied(err), err.code);
+    }
+  });
+
+  await withAppClient(async (client) => {
+    const { rows } = await client.query(`SELECT count(*)::int AS n FROM tenant_quota_usage`);
+    record(
+      'db: SELECT tenant_quota_usage with no tenant context returns 0 rows',
+      rows[0].n === 0,
+      `n=${rows[0].n}`,
+    );
   });
 
   // I7b: app role cannot DELETE audit_logs.

@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@9.15.4",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "dev": "pnpm -r --parallel dev",
@@ -17,8 +17,11 @@
     "test:unit": "pnpm -r --if-present test:unit",
     "test:integration": "pnpm --filter @kirindesk/api test:integration",
     "test:security": "node scripts/security-regression.mjs",
-    "verify:fast": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test:unit",
-    "verify:full": "pnpm verify:fast && pnpm test:integration && pnpm test:security",
+    "test:e2e": "playwright test",
+    "audit:prod": "node scripts/audit-production.mjs",
+    "verify:migrations": "pnpm --filter @kirindesk/database rehearse",
+    "verify:fast": "pnpm lint && pnpm format:check && pnpm typecheck && pnpm build && pnpm test:unit && pnpm audit:prod",
+    "verify:full": "pnpm verify:fast && pnpm test:integration && pnpm verify:migrations && pnpm test:security && pnpm test:e2e",
     "verify": "pnpm verify:full",
     "db:migrate": "pnpm --filter @kirindesk/database migrate",
     "db:rollback": "pnpm --filter @kirindesk/database rollback",
@@ -27,10 +30,16 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.55.0",
     "eslint": "^10.4.1",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.8.3",
     "typescript-eslint": "^8.60.0",
     "vitest": "^4.1.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "multer": "^2.2.0"
+    }
   }
 }

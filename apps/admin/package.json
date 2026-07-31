@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port ${ADMIN_PORT:-3002}",
     "build": "tsc -b && vite build",
-    "lint": "echo 'no lint configured'",
+    "lint": "eslint src vite.config.ts --config ../../eslint.config.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

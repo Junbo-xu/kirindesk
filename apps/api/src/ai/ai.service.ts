@@ -166,10 +166,6 @@ export class AiService {
     if (providerError) {
       throw providerError;
     }
-    // result is defined when there is no providerError.
-    void this.quota
-      .incrementAi(actor.tenantId, actor.userId)
-      .catch(() => this.logger.warn('quota incrementAi failed for ocr.extract'));
     const ok = result as NonNullable<typeof result>;
     return {
       invocation: toInvocationSummary(row),
@@ -232,9 +228,6 @@ export class AiService {
     if (providerError) {
       throw providerError;
     }
-    void this.quota
-      .incrementAi(actor.tenantId, actor.userId)
-      .catch(() => this.logger.warn('quota incrementAi failed for ai.complete'));
     const ok = result as NonNullable<typeof result>;
     return { invocation: toInvocationSummary(row), output: ok.output };
   }
@@ -352,6 +345,9 @@ export class AiService {
         actorType: 'tenant_user',
       },
       async (client: PoolClient) => {
+        if (params.status === STATUS_SUCCESS) {
+          await this.quota.consumeInTransaction(client, params.actor.tenantId, 'ai', 1);
+        }
         const { rows } = await client.query<InvocationRow>(
           `INSERT INTO provider_invocations
              (tenant_id, provider_type, provider_name, action, request_json,

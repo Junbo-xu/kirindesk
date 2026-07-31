@@ -2,10 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { requireEnv } from '../common/env';
+import { AuthSessionService } from '../auth-session/auth-session.service';
 
 @Injectable()
 export class PlatformJwtStrategy extends PassportStrategy(Strategy, 'platform-jwt') {
-  constructor() {
+  constructor(private readonly sessions: AuthSessionService) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -13,10 +14,10 @@ export class PlatformJwtStrategy extends PassportStrategy(Strategy, 'platform-jw
     });
   }
 
-  validate(payload: { sub: string; type: string; email: string }) {
-    if (payload.type !== 'platform_admin') {
+  async validate(payload: { sub: string; type: string; sid?: string }) {
+    if (payload.type !== 'platform_admin' || !payload.sid) {
       return null;
     }
-    return { sub: payload.sub, type: payload.type, email: payload.email };
+    return this.sessions.validatePlatformSession(payload.sid, payload.sub);
   }
 }

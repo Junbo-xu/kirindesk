@@ -118,6 +118,7 @@ export class UsersService {
         if (dto.roleIds && dto.roleIds.length > 0) {
           await this.assertRolesAssignable(client, actor, dto.roleIds);
         }
+        await this.quota.consumeInTransaction(client, actor.tenantId, 'users', 1);
         let created: UserRow;
         try {
           const { rows } = await client.query<UserRow>(
@@ -146,9 +147,6 @@ export class UsersService {
       after: { ...toUserSummary(row), roles },
     });
 
-    void this.quota
-      .increment(actor.tenantId, actor.userId)
-      .catch(() => this.logger.warn('quota increment failed for user.create'));
     void this.notification
       .send(
         actor.tenantId,
@@ -233,10 +231,12 @@ export class UsersService {
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        const existing = await this.fetchInScope(client, actor, id);
+        const existing = await this.fetchInScope(client, actor, id, true);
+        const isDeactivating = dto.status === 'inactive' && existing.status === 'active';
+        const isActivating = dto.status === 'active' && existing.status !== 'active';
 
         // Deactivating via status change is guarded like an explicit deactivate.
-        if (dto.status === 'inactive' && existing.status === 'active') {
+        if (isDeactivating) {
           await this.assertCanDeactivate(client, actor, existing);
         }
 
@@ -256,6 +256,13 @@ export class UsersService {
            WHERE id = $${params.length} AND deleted_at IS NULL RETURNING ${USER_COLS}`,
           params,
         );
+        if (rows.length === 0) throw new UserNotFoundException();
+        if (isDeactivating) {
+          await this.quota.releaseInTransaction(client, actor.tenantId, 'users', 1);
+        }
+        if (isActivating) {
+          await this.quota.consumeInTransaction(client, actor.tenantId, 'users', 1);
+        }
         const updatedRoles = await this.loadUserRoles(client, id);
         return { before: existing, after: rows[0], roles: updatedRoles };
       },
@@ -279,7 +286,7 @@ export class UsersService {
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        const existing = await this.fetchInScope(client, actor, id);
+        const existing = await this.fetchInScope(client, actor, id, true);
         const beforeRoles = await this.loadUserRoles(client, id);
         if (roleIds.length > 0) {
           await this.assertRolesAssignable(client, actor, roleIds);
@@ -310,13 +317,18 @@ export class UsersService {
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        const existing = await this.fetchInScope(client, actor, id);
+        const existing = await this.fetchInScope(client, actor, id, true);
+        const wasActive = existing.status === 'active';
         await this.assertCanDeactivate(client, actor, existing);
-        await client.query(
+        const { rows } = await client.query<UserRow>(
           `UPDATE users SET deleted_at = now(), status = 'inactive', updated_at = now()
-           WHERE id = $1 AND deleted_at IS NULL`,
+           WHERE id = $1 AND deleted_at IS NULL RETURNING ${USER_COLS}`,
           [id],
         );
+        if (rows.length === 0) throw new UserNotFoundException();
+        if (wasActive) {
+          await this.quota.releaseInTransaction(client, actor.tenantId, 'users', 1);
+        }
         return existing;
       },
     );
@@ -329,10 +341,6 @@ export class UsersService {
       before: toUserSummary(before),
       after: { ...toUserSummary(before), status: 'inactive', deleted: true },
     });
-
-    void this.quota
-      .decrement(actor.tenantId, actor.userId)
-      .catch(() => this.logger.warn('quota decrement failed for user.deactivate'));
   }
 
   // --- helpers ---
@@ -341,6 +349,7 @@ export class UsersService {
     client: PoolClient,
     actor: RequestActor,
     id: string,
+    forUpdate = false,
   ): Promise<UserRow> {
     const params: unknown[] = [id];
     let scopeClause = '';
@@ -349,7 +358,7 @@ export class UsersService {
       scopeClause = ' AND id = $2';
     }
     const { rows } = await client.query<UserRow>(
-      `SELECT ${USER_COLS} FROM users WHERE id = $1 AND deleted_at IS NULL${scopeClause}`,
+      `SELECT ${USER_COLS} FROM users WHERE id = $1 AND deleted_at IS NULL${scopeClause}${forUpdate ? ' FOR UPDATE' : ''}`,
       params,
     );
     if (rows.length === 0) throw new UserNotFoundException();
@@ -429,7 +438,7 @@ export class UsersService {
     if (target.id === actor.userId) {
       throw new SelfLockException();
     }
-    if (target.is_tenant_owner) {
+    if (target.is_tenant_owner && target.status === 'active') {
       const { rows } = await client.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM users
          WHERE is_tenant_owner = true AND status = 'active' AND deleted_at IS NULL`,

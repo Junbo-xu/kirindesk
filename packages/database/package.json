@@ -13,9 +13,10 @@
     "rollback": "tsx src/rollback.ts",
     "seed": "tsx src/seed.ts",
     "verify-chain": "tsx src/verify-chain.ts",
-    "lint": "echo 'no lint configured'",
+    "rehearse": "tsx src/rehearse.ts",
+    "lint": "eslint src vitest.config.ts --config ../../eslint.config.mjs",
     "typecheck": "tsc --noEmit",
-    "build": "echo 'no build configured'",
+    "build": "tsc -p tsconfig.json",
     "test:unit": "vitest run"
   },
   "dependencies": {

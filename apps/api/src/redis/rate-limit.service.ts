@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from './redis.constants';
 
@@ -34,9 +34,12 @@ export class RateLimitService {
     identifier: string,
     max: number,
     windowSec: number,
+    options: { failClosed?: boolean } = {},
   ): Promise<RateLimitResult> {
     if (!this.redis) {
-      // No Redis configured (e.g. integration tests, or REDIS_URL unset).
+      if (options.failClosed) {
+        throw new ServiceUnavailableException('Login protection unavailable');
+      }
       return { allowed: true, count: 0, retryAfterSec: 0 };
     }
     const key = `ratelimit:${bucket}:${identifier}`;
@@ -52,7 +55,10 @@ export class RateLimitService {
       }
       return { allowed: true, count, retryAfterSec: 0 };
     } catch (err) {
-      // Fail open: a broken limiter must not break the endpoint.
+      if (options.failClosed) {
+        this.logger.error('Required login rate limit check failed; rejecting request.');
+        throw new ServiceUnavailableException('Login protection unavailable');
+      }
       this.logger.warn(
         `Rate limit check failed for ${bucket}:${identifier}; allowing request. ${
           (err as Error).message

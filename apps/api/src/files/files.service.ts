@@ -74,17 +74,21 @@ export class FilesService {
     // user-supplied file name (which could contain path traversal or collide).
     const storageKey = `${actor.tenantId}/${randomUUID()}`;
 
-    // Store bytes first; only record metadata if the object landed. If the DB
-    // insert later fails, the orphaned object is harmless (no row references it)
-    // and can be swept later.
-    await this.storage.put(storageKey, input.buffer, input.mimeType);
-
     let row: FileRow;
+    let objectStored = false;
     try {
       row = await withTenantContext(
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
+          await this.quota.consumeInTransaction(
+            client,
+            actor.tenantId,
+            'storage',
+            input.buffer.length,
+          );
+          await this.storage.put(storageKey, input.buffer, input.mimeType);
+          objectStored = true;
           const { rows } = await client.query<FileRow>(
             `INSERT INTO files
                (tenant_id, uploaded_by, original_name, storage_key, mime_type,
@@ -106,12 +110,13 @@ export class FilesService {
         },
       );
     } catch (err) {
-      // Roll back the stored object so a failed insert leaves no orphan.
-      await this.storage.delete(storageKey).catch((delErr) => {
-        this.logger.error(
-          `Failed to clean up orphaned object ${storageKey} after insert error: ${String(delErr)}`,
-        );
-      });
+      if (objectStored) {
+        await this.storage.delete(storageKey).catch((delErr) => {
+          this.logger.error(
+            `Failed to clean up orphaned object ${storageKey} after insert error: ${String(delErr)}`,
+          );
+        });
+      }
       throw err;
     }
 
@@ -123,9 +128,6 @@ export class FilesService {
       after: toFileResponse(row),
     });
 
-    void this.quota
-      .addStorage(actor.tenantId, actor.userId, input.buffer.length)
-      .catch(() => this.logger.warn('quota addStorage failed for file.upload'));
     return toFileResponse(row);
   }
 
@@ -177,6 +179,7 @@ export class FilesService {
     client: PoolClient,
     actor: RequestActor,
     id: string,
+    forUpdate = false,
   ): Promise<FileRow> {
     const params: unknown[] = [id];
     let scopeClause = '';
@@ -185,7 +188,7 @@ export class FilesService {
       scopeClause = ' AND uploaded_by = $2';
     }
     const { rows } = await client.query<FileRow>(
-      `SELECT * FROM files WHERE id = $1 AND deleted_at IS NULL${scopeClause}`,
+      `SELECT * FROM files WHERE id = $1 AND deleted_at IS NULL${scopeClause}${forUpdate ? ' FOR UPDATE' : ''}`,
       params,
     );
     if (rows.length === 0) {
@@ -339,11 +342,18 @@ export class FilesService {
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
-          const existing = await this.fetchInScope(client, actor, id);
+          const existing = await this.fetchInScope(client, actor, id, true);
           const { rows } = await client.query<FileRow>(
             `UPDATE files SET deleted_at = now()
              WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
             [id],
+          );
+          if (rows.length === 0) throw new FileNotFoundException();
+          await this.quota.releaseInTransaction(
+            client,
+            actor.tenantId,
+            'storage',
+            Number(rows[0].size_bytes),
           );
           return { before: existing, after: rows[0] };
         },
@@ -367,10 +377,6 @@ export class FilesService {
       before: toFileResponse(before),
       after: { ...toFileResponse(after), deleted: true },
     });
-
-    void this.quota
-      .subtractStorage(actor.tenantId, actor.userId, Number(before.size_bytes))
-      .catch(() => this.logger.warn('quota subtractStorage failed for file.remove'));
   }
 
   private async safeAudit(params: {

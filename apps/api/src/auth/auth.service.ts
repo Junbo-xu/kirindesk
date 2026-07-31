@@ -5,6 +5,8 @@ import type { Pool } from 'pg';
 import { APP_POOL } from '../database/database.module';
 import { UsersService } from '../users/users.service';
 import { AuditService } from '../audit/audit.service';
+import { randomUUID } from 'node:crypto';
+import { AuthSessionService } from '../auth-session/auth-session.service';
 
 const DUMMY_BCRYPT_HASH = bcrypt.hashSync('__dummy_never_match__', 12);
 
@@ -15,6 +17,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
+    private readonly sessions: AuthSessionService,
   ) {}
 
   async login(
@@ -54,8 +57,24 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload = { sub: user.id, type: 'tenant_user', tenantId, email: user.email };
+    const sessionId = randomUUID();
+    const payload = {
+      sub: user.id,
+      type: 'tenant_user',
+      tenantId,
+      email: user.email,
+      sid: sessionId,
+    };
     const accessToken = this.jwtService.sign(payload);
+    const decoded = this.jwtService.decode(accessToken) as { exp?: number };
+    if (!decoded.exp) throw new Error('Signed tenant token has no expiration.');
+    await this.sessions.createTenantSession(tenantId, {
+      sessionId,
+      actorId: user.id,
+      expiresAt: new Date(decoded.exp * 1000),
+      ip: meta.ip,
+      userAgent: meta.ua,
+    });
 
     await this.auditService.log({
       tenantId,
@@ -69,6 +88,24 @@ export class AuthService {
     });
 
     return { accessToken, user: { id: user.id, email: user.email, name: user.name, tenantId } };
+  }
+
+  async logout(
+    user: { sub: string; tenantId: string; sid: string },
+    meta: { ip?: string; ua?: string },
+  ): Promise<void> {
+    await this.sessions.revokeTenantSession(user.sid, user.tenantId, user.sub);
+    await this.auditService.log({
+      tenantId: user.tenantId,
+      actorType: 'tenant_user',
+      actorId: user.sub,
+      action: 'auth:logout',
+      resourceType: 'user',
+      resourceId: user.sub,
+      metadata: { sessionId: user.sid },
+      ipAddress: meta.ip,
+      userAgent: meta.ua,
+    });
   }
 
   private async logFailed(

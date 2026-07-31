@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { getPool, closePool } from './client.js';
 
 const ZERO_HASH = '0'.repeat(64);
-const HASH_VERSION = 1;
 
 export function canonicalizeJson(obj: unknown): string {
   if (obj === null || obj === undefined) return '';
