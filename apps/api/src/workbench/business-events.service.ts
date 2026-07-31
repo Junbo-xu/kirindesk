@@ -47,6 +47,9 @@ const AUDIT_VISIBILITY_SQL = `CASE
   WHEN al.resource_type = 'quote_task' THEN 'quotations:view'
   WHEN al.resource_type = 'file' THEN 'files:view'
   WHEN al.resource_type = 'report' THEN 'reports:view'
+  WHEN al.resource_type IN (
+    'finance_review', 'profit_snapshot', 'commission_rule_version', 'commission_candidate_v2'
+  ) THEN 'finance_reviews:view'
   WHEN al.resource_type LIKE 'commission%' THEN 'commission_tables:view'
   WHEN al.resource_type = 'business_exception' THEN 'business_exceptions:view'
   ELSE NULL

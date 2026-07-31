@@ -51,6 +51,7 @@ import { InquiriesListPage } from './workbench/InquiriesListPage';
 import { QuoteTasksPage } from './workbench/QuoteTasksPage';
 import { CommercialFlowPage } from './commercial/CommercialFlowPage';
 import { FulfillmentPage } from './fulfillment/FulfillmentPage';
+import { FinanceWorkspacePage } from './finance/FinanceWorkspacePage';
 
 function sensitive(element: React.ReactNode) {
   return <SensitivePageWatermark>{element}</SensitivePageWatermark>;
@@ -91,6 +92,9 @@ export function App() {
               </Route>
               <Route element={<PermissionRoute permission="fulfillment:view" />}>
                 <Route path="/fulfillment" element={sensitive(<FulfillmentPage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="finance_reviews:view" />}>
+                <Route path="/finance" element={sensitive(<FinanceWorkspacePage />)} />
               </Route>
 
               <Route element={<PermissionRoute permission="customers:view" />}>

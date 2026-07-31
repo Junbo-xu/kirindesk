@@ -192,6 +192,20 @@ export const FULFILLMENT_PERMS = [
   'order_expenses:record',
 ] as const;
 
+export const STAGE_2E_FINANCE_PERMS = [
+  'finance_reviews:view',
+  'finance_reviews:review',
+  'profit_snapshots:create',
+  'commission_rules:manage',
+  'commission_candidates:calculate',
+  'commission_candidates:lock',
+] as const;
+
+const STAGE_2E_PERMS: { code: string; moduleId: string }[] = STAGE_2E_FINANCE_PERMS.map((code) => ({
+  code,
+  moduleId: FINANCE_MODULE_ID,
+}));
+
 const STAGE_2D_PERMS: { code: string; moduleId: string }[] = [
   { code: 'fulfillment:view', moduleId: ORDERS_MODULE_ID },
   { code: 'goods_receipts:manage', moduleId: PROCUREMENT_MODULE_ID },
@@ -377,6 +391,15 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    for (const { code, moduleId } of STAGE_2E_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
     // Support-access permission rows (system module). Inserted so they exist,
     // but granted selectively below — NOT via the all-roles loop.
     for (const code of SUPPORT_ACCESS_PERMS) {
@@ -411,6 +434,20 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,
           [spec.tenantId, spec.roleId, permId[code], spec.scope],
+        );
+      }
+    }
+
+    const stage2ePermissionRows = await client.query<{ id: string }>(
+      `SELECT id FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2E_FINANCE_PERMS as unknown as string[]],
+    );
+    for (const spec of ROLE_SPECS.filter((row) => row.roleId !== SALES_ROLE_ID)) {
+      for (const permission of stage2ePermissionRows.rows) {
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, 'all')`,
+          [spec.tenantId, spec.roleId, permission.id],
         );
       }
     }

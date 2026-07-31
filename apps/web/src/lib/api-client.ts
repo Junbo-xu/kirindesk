@@ -90,6 +90,12 @@ import {
   SalesQuotation,
   Shipment,
   WorkbenchResponse,
+  CalculateCommissionCandidateInput,
+  CommissionCandidateV2,
+  CommissionRuleV2,
+  FinanceConversionInput,
+  FinanceOrderDetail,
+  FinanceOrderSummary,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -782,6 +788,58 @@ export const apiClient = {
   },
   purchaseSummary(query: ReportSummaryQuery): Promise<ReportSummaryResponse> {
     return request<ReportSummaryResponse>(`/api/reports/purchase-summary${reportQs(query)}`);
+  },
+
+  listFinanceOrders(): Promise<FinanceOrderSummary[]> {
+    return request<FinanceOrderSummary[]>('/api/finance/orders');
+  },
+  getFinanceOrder(id: string): Promise<FinanceOrderDetail> {
+    return request<FinanceOrderDetail>(`/api/finance/orders/${id}`);
+  },
+  createFinanceReview(
+    id: string,
+    input: {
+      decision: 'verified' | 'returned';
+      reason?: string;
+      conversions: FinanceConversionInput[];
+    },
+  ): Promise<FinanceOrderDetail['finance_reviews'][number]> {
+    return request<FinanceOrderDetail['finance_reviews'][number]>(
+      `/api/finance/orders/${id}/reviews`,
+      { method: 'POST', body: input },
+    );
+  },
+  createProfitSnapshot(
+    id: string,
+    status: 'provisional' | 'final',
+  ): Promise<FinanceOrderDetail['profit_snapshots'][number]> {
+    return request<FinanceOrderDetail['profit_snapshots'][number]>(
+      `/api/finance/orders/${id}/profit-snapshots`,
+      { method: 'POST', body: { status } },
+    );
+  },
+  replaceFinanceCommissionRules(
+    rules: Array<Pick<CommissionRuleV2, 'role_type' | 'basis_type' | 'rate_bps'>>,
+  ): Promise<CommissionRuleV2[]> {
+    return request<CommissionRuleV2[]>('/api/finance/commission-rules', {
+      method: 'PUT',
+      body: { rules },
+    });
+  },
+  calculateFinanceCommissionCandidate(
+    id: string,
+    input: CalculateCommissionCandidateInput,
+  ): Promise<CommissionCandidateV2> {
+    return request<CommissionCandidateV2>(`/api/finance/orders/${id}/commission-candidates`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  lockFinanceCommissionCandidate(id: string, comment?: string): Promise<CommissionCandidateV2> {
+    return request<CommissionCandidateV2>(`/api/finance/commission-candidates/${id}/lock`, {
+      method: 'POST',
+      body: { comment },
+    });
   },
 
   // Phase 1F-E commission. Reads are derived in the tenant base currency; rate

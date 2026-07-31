@@ -1307,6 +1307,177 @@ export interface SignupResult {
   };
 }
 
+export type FinanceSourceType = 'customer_receipt' | 'purchase_cost' | 'order_expense';
+export type CommissionRoleType = 'sales' | 'procurement';
+export type CommissionBasisType = 'sales_revenue' | 'gross_profit' | 'net_profit';
+
+export interface FinanceOrderSummary {
+  id: string;
+  order_number: string;
+  status: string;
+  currency: Currency;
+  total_amount: string;
+  finance_decision: 'verified' | 'returned' | null;
+  profit_status: 'provisional' | 'final' | null;
+  commission_status: 'calculated' | 'locked' | null;
+}
+
+export interface FinanceOrderDetailOrder {
+  id: string;
+  owner_user_id: string;
+  order_number: string;
+  status: string;
+  currency: Currency;
+  total_amount: string;
+}
+
+export interface FinanceSource {
+  subject_type: FinanceSourceType;
+  id: string;
+  amount: string;
+  currency: Currency;
+  expense_type: 'freight' | 'insurance' | 'customs' | 'other' | null;
+  status: string;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+  needs_fx: boolean;
+}
+
+export interface FinanceReviewItem {
+  id: string;
+  subject_type:
+    | FinanceSourceType
+    | 'missing_receipt'
+    | 'missing_cost'
+    | 'missing_freight'
+    | 'missing_fx';
+  subject_id: string | null;
+  decision: 'verified' | 'returned';
+  source_amount: string | null;
+  source_currency: Currency | null;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+}
+
+export interface FinanceReview {
+  id: string;
+  version: number;
+  decision: 'verified' | 'returned';
+  reason: string | null;
+  input_fingerprint: string;
+  missing_items: string[];
+  reviewed_by: string;
+  reviewed_at: string;
+  items: FinanceReviewItem[];
+}
+
+export interface ProfitSnapshot {
+  id: string;
+  version: number;
+  status: 'provisional' | 'final';
+  supersedes_id: string | null;
+  finance_review_id: string | null;
+  formula_version: string;
+  input_fingerprint: string;
+  input_snapshot: Record<string, unknown>;
+  missing_items: string[];
+  revenue_rmb: string;
+  purchase_cost_rmb: string;
+  freight_rmb: string;
+  other_expense_rmb: string;
+  refund_rmb: string;
+  gross_profit_rmb: string;
+  net_profit_rmb: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CommissionRuleV2 {
+  id: string;
+  role_type: CommissionRoleType;
+  version: number;
+  supersedes_id: string | null;
+  basis_type: CommissionBasisType;
+  rate_bps: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CommissionCandidateLineV2 {
+  id: string;
+  role_type: CommissionRoleType;
+  user_id: string;
+  user_name: string;
+  rule_version_id: string;
+  basis_type: CommissionBasisType;
+  raw_basis_rmb: string;
+  eligible_basis_rmb: string;
+  share_bps: number;
+  allocated_basis_rmb: string;
+  rate_bps: number;
+  commission_amount_rmb: string;
+}
+
+export interface CommissionCandidateV2 {
+  id: string;
+  sales_order_id: string;
+  profit_snapshot_id: string;
+  version: number;
+  supersedes_id: string | null;
+  formula_version: string;
+  calculation_snapshot: Record<string, unknown>;
+  total_commission_rmb: string;
+  revision_reason: string | null;
+  created_by: string;
+  created_at: string;
+  status: 'calculated' | 'locked';
+  lock: {
+    id: string;
+    locked_by: string;
+    locked_at: string;
+    comment: string | null;
+  } | null;
+  lines: CommissionCandidateLineV2[];
+}
+
+export interface FinanceOrderDetail {
+  order: FinanceOrderDetailOrder;
+  source_state: {
+    fingerprint: string;
+    missing_items: string[];
+    receipts: FinanceSource[];
+    purchase_costs: FinanceSource[];
+    expenses: FinanceSource[];
+  };
+  finance_reviews: FinanceReview[];
+  profit_snapshots: ProfitSnapshot[];
+  commission_rules: CommissionRuleV2[];
+  commission_candidates: CommissionCandidateV2[];
+  participants: Array<{ id: string; name: string; email: string }>;
+}
+
+export interface FinanceConversionInput {
+  subject_type: 'customer_receipt' | 'purchase_cost';
+  subject_id: string;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+}
+
+export interface CommissionAllocationInput {
+  role_type: CommissionRoleType;
+  participants: Array<{ user_id: string; share_bps: number }>;
+}
+
+export interface CalculateCommissionCandidateInput {
+  allocations: CommissionAllocationInput[];
+  revision_reason?: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

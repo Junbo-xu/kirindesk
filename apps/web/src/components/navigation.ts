@@ -39,6 +39,7 @@ export const NAVIGATION: NavigationGroup[] = [
   {
     label: '财务',
     items: [
+      { label: '财务核对', to: '/finance', anyOf: ['finance_reviews:view'] },
       { label: '经营报表', to: '/reports', anyOf: ['reports:view'] },
       { label: '提成', to: '/commission', anyOf: ['commission_tables:view'] },
       { label: '账单', to: '/billing', anyOf: ['billing:view'] },

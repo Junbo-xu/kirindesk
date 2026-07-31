@@ -35,7 +35,7 @@ export default defineConfig({
         LOGIN_RATE_LIMIT_MAX: '100',
         LOGIN_RATE_LIMIT_WINDOW_SEC: '900',
         TRUST_PROXY: 'true',
-        S3_ENDPOINT: 'http://127.0.0.1:9000',
+        S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://127.0.0.1:9000',
         S3_REGION: 'us-east-1',
         S3_BUCKET: process.env.S3_BUCKET ?? 'kirindesk-files',
         S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ?? 'kirindesk',

@@ -30,6 +30,7 @@ import { WorkbenchModule } from './workbench/workbench.module';
 import { CommercialModule } from './commercial/commercial.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
+import { FinanceModule } from './finance/finance.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { FulfillmentModule } from './fulfillment/fulfillment.module';
     CommercialModule,
     ProcurementModule,
     FulfillmentModule,
+    FinanceModule,
   ],
 })
 export class AppModule {}
