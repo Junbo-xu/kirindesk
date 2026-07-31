@@ -220,6 +220,154 @@ export interface CommercialSettings {
   bypass_reason: string | null;
 }
 
+export interface FulfillmentSettings {
+  require_sales_receipt_confirmation: boolean;
+}
+
+export interface FulfillmentOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string | null;
+  accepted_quantity: string;
+  shipped_quantity: string;
+  delivered_quantity: string;
+  available_quantity: string;
+}
+
+export interface FulfillmentPurchaseOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string | null;
+}
+
+export interface FulfillmentPurchaseOrder {
+  id: string;
+  order_number: string;
+  currency: Currency;
+  status: string;
+  items: FulfillmentPurchaseOrderItem[];
+}
+
+export interface GoodsReceiptItem {
+  id: string;
+  purchase_order_item_id: string;
+  sales_order_item_id: string;
+  received_quantity: string;
+  accepted_quantity: string;
+  rejected_quantity: string;
+  quantity_variance: string;
+}
+
+export interface GoodsReceipt {
+  id: string;
+  sales_order_id: string;
+  purchase_order_id: string;
+  batch_number: string;
+  status: 'pending' | 'inspected' | 'accepted' | 'rejected';
+  qc_result: 'passed' | 'partial' | 'failed' | null;
+  is_final_batch: boolean;
+  sales_confirmation_required: boolean;
+  note: string | null;
+  created_at: string;
+  items: GoodsReceiptItem[];
+  files: Array<{ file_id: string; file_role: string }>;
+  confirmations: Array<{
+    id: string;
+    confirmation_type: 'procurement_qc' | 'sales_acceptance';
+    decision: 'accepted' | 'rejected';
+    reason: string | null;
+    confirmed_at: string;
+  }>;
+}
+
+export interface Shipment {
+  id: string;
+  sales_order_id: string;
+  batch_number: string;
+  status: 'draft' | 'dispatched' | 'delivered';
+  carrier: string;
+  tracking_number: string;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  delivery_proof_file_id: string | null;
+  delivery_note: string | null;
+  items: Array<{
+    id: string;
+    sales_order_item_id: string;
+    quantity: string;
+    available_quantity_snapshot: string;
+  }>;
+  logistics_events: Array<{
+    id: string;
+    event_type: string;
+    location: string | null;
+    description: string | null;
+    occurred_at: string;
+  }>;
+  receipts: Array<{
+    id: string;
+    customer_receipt_id: string;
+    amount: string;
+    currency: Currency;
+    received_at: string;
+    status: 'recorded' | 'confirmed';
+  }>;
+}
+
+export interface OrderExpense {
+  id: string;
+  sales_order_id: string;
+  shipment_id: string | null;
+  expense_type: 'freight' | 'insurance' | 'customs' | 'other';
+  amount: string;
+  currency: Currency;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+  status: 'pending_fx' | 'complete';
+  note: string | null;
+  created_at: string;
+}
+
+export interface FulfillmentOrder {
+  id: string;
+  order_number: string;
+  currency: Currency;
+  aggregate_status: string;
+  settings: FulfillmentSettings;
+  items: FulfillmentOrderItem[];
+  purchase_orders: FulfillmentPurchaseOrder[];
+  goods_receipts: GoodsReceipt[];
+  shipments: Shipment[];
+  expenses: OrderExpense[];
+}
+
+export interface CreateGoodsReceiptInput {
+  batch_number: string;
+  is_final_batch: boolean;
+  items: Array<{ purchase_order_item_id: string; received_quantity: string }>;
+  file_ids?: string[];
+  note?: string;
+}
+
+export interface CreateShipmentInput {
+  batch_number: string;
+  carrier: string;
+  tracking_number: string;
+  items: Array<{ sales_order_item_id: string; quantity: string }>;
+}
+
+export interface CompleteExpenseFxInput {
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+}
+
 export interface QuoteTaskSummary {
   id: string;
   inquiry_id: string;

@@ -23,6 +23,7 @@ export const NAVIGATION: NavigationGroup[] = [
       },
       { label: '销售订单', to: '/orders', anyOf: ['orders:view'] },
       { label: '采购订单', to: '/purchase-orders', anyOf: ['procurement:view'] },
+      { label: '履约与物流', to: '/fulfillment', anyOf: ['fulfillment:view'] },
       { label: '业务异常', to: '/exceptions', anyOf: ['business_exceptions:view'] },
       { label: '凭证时间线', to: '/timeline', anyOf: ['business_events:view'] },
     ],

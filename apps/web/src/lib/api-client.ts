@@ -74,13 +74,21 @@ import {
   BusinessExceptionType,
   CommercialSelection,
   CommercialSettings,
+  CompleteExpenseFxInput,
+  CreateGoodsReceiptInput,
+  CreateShipmentInput,
   CustomerReceipt,
   ExceptionAssignee,
+  FulfillmentOrder,
+  FulfillmentSettings,
+  GoodsReceipt,
   InquirySummary,
+  OrderExpense,
   ProcurementGate,
   ProformaInvoice,
   QuoteTaskSummary,
   SalesQuotation,
+  Shipment,
   WorkbenchResponse,
 } from './types';
 
@@ -426,6 +434,108 @@ export const apiClient = {
     return request<CommercialSettings>('/api/commercial-settings', {
       method: 'PUT',
       body: input,
+    });
+  },
+  getFulfillmentSettings(): Promise<FulfillmentSettings> {
+    return request<FulfillmentSettings>('/api/fulfillment/settings');
+  },
+  updateFulfillmentSettings(input: FulfillmentSettings): Promise<FulfillmentSettings> {
+    return request<FulfillmentSettings>('/api/fulfillment/settings', {
+      method: 'PUT',
+      body: input,
+    });
+  },
+  getFulfillmentOrder(orderId: string): Promise<FulfillmentOrder> {
+    return request<FulfillmentOrder>(`/api/sales-orders/${orderId}/fulfillment`);
+  },
+  createGoodsReceipt(
+    purchaseOrderId: string,
+    input: CreateGoodsReceiptInput,
+  ): Promise<GoodsReceipt> {
+    return request<GoodsReceipt>(`/api/purchase-orders/${purchaseOrderId}/goods-receipts`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  inspectGoodsReceipt(
+    receiptId: string,
+    items: Array<{ item_id: string; accepted_quantity: string; rejected_quantity: string }>,
+  ): Promise<GoodsReceipt> {
+    return request<GoodsReceipt>(`/api/goods-receipts/${receiptId}/inspect`, {
+      method: 'POST',
+      body: { items },
+    });
+  },
+  confirmGoodsReceipt(
+    receiptId: string,
+    decision: 'accepted' | 'rejected',
+    reason?: string,
+  ): Promise<GoodsReceipt> {
+    return request<GoodsReceipt>(`/api/goods-receipts/${receiptId}/confirm`, {
+      method: 'POST',
+      body: { decision, reason },
+    });
+  },
+  createShipment(orderId: string, input: CreateShipmentInput): Promise<Shipment> {
+    return request<Shipment>(`/api/sales-orders/${orderId}/shipments`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  dispatchShipment(shipmentId: string): Promise<Shipment> {
+    return request<Shipment>(`/api/shipments/${shipmentId}/dispatch`, { method: 'POST' });
+  },
+  addLogisticsEvent(
+    shipmentId: string,
+    input: {
+      event_type: 'in_transit' | 'customs' | 'exception';
+      location?: string;
+      description?: string;
+      occurred_at: string;
+    },
+  ): Promise<Shipment['logistics_events'][number]> {
+    return request(`/api/shipments/${shipmentId}/logistics-events`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  deliverShipment(
+    shipmentId: string,
+    input: { delivered_at: string; proof_file_id: string; note?: string },
+  ): Promise<Shipment> {
+    return request<Shipment>(`/api/shipments/${shipmentId}/deliver`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  recordOrderExpense(
+    orderId: string,
+    input: {
+      shipment_id?: string;
+      expense_type: OrderExpense['expense_type'];
+      amount: string;
+      currency: Currency;
+      fx_rate_to_rmb?: string;
+      fx_source?: string;
+      fx_captured_at?: string;
+      note?: string;
+    },
+  ): Promise<OrderExpense> {
+    return request<OrderExpense>(`/api/sales-orders/${orderId}/expenses`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  completeExpenseFx(expenseId: string, input: CompleteExpenseFxInput): Promise<OrderExpense> {
+    return request<OrderExpense>(`/api/order-expenses/${expenseId}/complete-fx`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  linkShipmentReceipt(shipmentId: string, customerReceiptId: string): Promise<unknown> {
+    return request(`/api/shipments/${shipmentId}/customer-receipts`, {
+      method: 'POST',
+      body: { customer_receipt_id: customerReceiptId },
     });
   },
   submitInquiry(id: string): Promise<{ inquiry: InquirySummary }> {

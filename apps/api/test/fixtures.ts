@@ -184,6 +184,22 @@ const STAGE_2B_PERMS: { code: string; moduleId: string }[] = [
   ...PROCUREMENT_GATE_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
 ];
 
+export const FULFILLMENT_PERMS = [
+  'fulfillment:view',
+  'goods_receipts:manage',
+  'goods_receipts:confirm',
+  'shipments:manage',
+  'order_expenses:record',
+] as const;
+
+const STAGE_2D_PERMS: { code: string; moduleId: string }[] = [
+  { code: 'fulfillment:view', moduleId: ORDERS_MODULE_ID },
+  { code: 'goods_receipts:manage', moduleId: PROCUREMENT_MODULE_ID },
+  { code: 'goods_receipts:confirm', moduleId: ORDERS_MODULE_ID },
+  { code: 'shipments:manage', moduleId: ORDERS_MODULE_ID },
+  { code: 'order_expenses:record', moduleId: FINANCE_MODULE_ID },
+];
+
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...CUSTOMER_PERMS.map((code) => ({ code, moduleId: CRM_MODULE_ID })),
@@ -352,6 +368,15 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    for (const { code, moduleId } of STAGE_2D_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
     // Support-access permission rows (system module). Inserted so they exist,
     // but granted selectively below — NOT via the all-roles loop.
     for (const code of SUPPORT_ACCESS_PERMS) {
@@ -386,6 +411,29 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,
           [spec.tenantId, spec.roleId, permId[code], spec.scope],
+        );
+      }
+    }
+
+    const stage2dPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2D_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const salesCodes: string[] = [
+        'fulfillment:view',
+        'goods_receipts:confirm',
+        'shipments:manage',
+        'order_expenses:record',
+      ];
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID ? salesCodes : STAGE_2D_PERMS.map(({ code }) => code);
+      for (const permission of stage2dPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code)) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
         );
       }
     }

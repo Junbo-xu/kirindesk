@@ -29,6 +29,7 @@ import { InquiriesModule } from './inquiries/inquiries.module';
 import { WorkbenchModule } from './workbench/workbench.module';
 import { CommercialModule } from './commercial/commercial.module';
 import { ProcurementModule } from './procurement/procurement.module';
+import { FulfillmentModule } from './fulfillment/fulfillment.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { ProcurementModule } from './procurement/procurement.module';
     WorkbenchModule,
     CommercialModule,
     ProcurementModule,
+    FulfillmentModule,
   ],
 })
 export class AppModule {}
