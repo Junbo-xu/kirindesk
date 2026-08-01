@@ -14,6 +14,7 @@
     "seed": "tsx src/seed.ts",
     "verify-chain": "tsx src/verify-chain.ts",
     "rehearse": "tsx src/rehearse.ts",
+    "rehearse:release": "tsx src/release-rehearsal.ts",
     "lint": "eslint src vitest.config.ts --config ../../eslint.config.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.json",

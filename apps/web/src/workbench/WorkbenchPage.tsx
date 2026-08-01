@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { apiClient } from '../lib/api-client';
 import { ApiError, WorkbenchResponse } from '../lib/types';
+import { useAuth } from '../auth/AuthContext';
 
 const CAPABILITY_LABELS: Record<string, string> = {
   business: '业务',
@@ -17,10 +18,12 @@ function formatAmount(amount: string, currency: string) {
 }
 
 export function WorkbenchPage() {
+  const { user } = useAuth();
   const [data, setData] = useState<WorkbenchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (user?.workflowMode === 'hidden') return;
     let active = true;
     apiClient
       .getWorkbench()
@@ -33,7 +36,18 @@ export function WorkbenchPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [user?.workflowMode]);
+
+  if (user?.workflowMode === 'hidden') {
+    return (
+      <section style={{ maxWidth: 760 }}>
+        <h1 style={{ marginTop: 0 }}>业务闭环暂不可用</h1>
+        <p style={{ color: '#475569' }}>
+          新版业务入口已通过发布开关隐藏，已有数据仍保留在数据库中。客户、供应商、订单和治理功能不受影响。
+        </p>
+      </section>
+    );
+  }
 
   if (error) return <p style={{ color: 'crimson' }}>{error}</p>;
   if (!data) return <p style={{ color: '#64748b' }}>正在汇总你的待办…</p>;

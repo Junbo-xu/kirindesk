@@ -2,6 +2,7 @@ export interface NavigationItem {
   label: string;
   to: string;
   anyOf: string[];
+  workflow?: boolean;
 }
 
 export interface NavigationGroup {
@@ -13,21 +14,32 @@ export const NAVIGATION: NavigationGroup[] = [
   {
     label: '工作',
     items: [
-      { label: '角色工作台', to: '/', anyOf: ['workbench:view'] },
-      { label: '询盘', to: '/inquiries', anyOf: ['inquiries:view'] },
-      { label: '报价任务', to: '/quote-tasks', anyOf: ['quotations:view'] },
+      { label: '角色工作台', to: '/', anyOf: ['workbench:view'], workflow: true },
+      { label: '询盘', to: '/inquiries', anyOf: ['inquiries:view'], workflow: true },
+      { label: '报价任务', to: '/quote-tasks', anyOf: ['quotations:view'], workflow: true },
       {
         label: 'PI 与收款',
         to: '/commercial',
         anyOf: ['proforma_invoices:view', 'customer_receipts:view'],
+        workflow: true,
       },
       { label: '销售订单', to: '/orders', anyOf: ['orders:view'] },
       { label: '采购订单', to: '/purchase-orders', anyOf: ['procurement:view'] },
-      { label: '履约与物流', to: '/fulfillment', anyOf: ['fulfillment:view'] },
-      { label: '样品单', to: '/samples', anyOf: ['sample_orders:view'] },
-      { label: '售后', to: '/after-sales', anyOf: ['after_sales:view'] },
-      { label: '业务异常', to: '/exceptions', anyOf: ['business_exceptions:view'] },
-      { label: '凭证时间线', to: '/timeline', anyOf: ['business_events:view'] },
+      { label: '履约与物流', to: '/fulfillment', anyOf: ['fulfillment:view'], workflow: true },
+      { label: '样品单', to: '/samples', anyOf: ['sample_orders:view'], workflow: true },
+      { label: '售后', to: '/after-sales', anyOf: ['after_sales:view'], workflow: true },
+      {
+        label: '业务异常',
+        to: '/exceptions',
+        anyOf: ['business_exceptions:view'],
+        workflow: true,
+      },
+      {
+        label: '凭证时间线',
+        to: '/timeline',
+        anyOf: ['business_events:view'],
+        workflow: true,
+      },
     ],
   },
   {
@@ -41,7 +53,12 @@ export const NAVIGATION: NavigationGroup[] = [
   {
     label: '财务',
     items: [
-      { label: '财务核对', to: '/finance', anyOf: ['finance_reviews:view'] },
+      {
+        label: '财务核对',
+        to: '/finance',
+        anyOf: ['finance_reviews:view'],
+        workflow: true,
+      },
       { label: '经营报表', to: '/reports', anyOf: ['reports:view'] },
       { label: '提成', to: '/commission', anyOf: ['commission_tables:view'] },
       { label: '账单', to: '/billing', anyOf: ['billing:view'] },
@@ -61,9 +78,16 @@ export const NAVIGATION: NavigationGroup[] = [
   },
 ];
 
-export function visibleNavigation(permissions: Record<string, string>): NavigationGroup[] {
+export function visibleNavigation(
+  permissions: Record<string, string>,
+  workflowMode: 'active' | 'read_only' | 'hidden' = 'active',
+): NavigationGroup[] {
   return NAVIGATION.map((group) => ({
     ...group,
-    items: group.items.filter((item) => item.anyOf.some((code) => Boolean(permissions[code]))),
+    items: group.items.filter(
+      (item) =>
+        !(workflowMode === 'hidden' && item.workflow) &&
+        item.anyOf.some((code) => Boolean(permissions[code])),
+    ),
   })).filter((group) => group.items.length > 0);
 }

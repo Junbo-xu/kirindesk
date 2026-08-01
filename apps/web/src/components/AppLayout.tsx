@@ -4,7 +4,7 @@ import { visibleNavigation } from './navigation';
 
 export function AppLayout() {
   const { user, logout } = useAuth();
-  const groups = visibleNavigation(user?.permissions ?? {});
+  const groups = visibleNavigation(user?.permissions ?? {}, user?.workflowMode);
   return (
     <div style={{ fontFamily: 'system-ui', minHeight: '100vh', background: '#f8fafc' }}>
       <header
@@ -20,6 +20,9 @@ export function AppLayout() {
       >
         <strong style={{ letterSpacing: 0.3 }}>KirinDesk</strong>
         <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {user?.workflowMode === 'read_only' && (
+            <span style={{ color: '#fde68a', fontSize: 13 }}>业务闭环只读</span>
+          )}
           <span style={{ color: '#cbd5e1', fontSize: 13 }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>
         </span>

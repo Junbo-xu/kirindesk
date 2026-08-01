@@ -32,10 +32,14 @@ import { ProcurementModule } from './procurement/procurement.module';
 import { FulfillmentModule } from './fulfillment/fulfillment.module';
 import { FinanceModule } from './finance/finance.module';
 import { SamplesAfterSalesModule } from './samples-after-sales/samples-after-sales.module';
+import { ReleaseModule } from './release/release.module';
+import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
   imports: [
     DatabaseModule,
+    ReleaseModule,
+    ObservabilityModule,
     HealthModule,
     AuthModule,
     PlatformAuthModule,

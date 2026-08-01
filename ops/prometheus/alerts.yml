@@ -1,0 +1,37 @@
+groups:
+  - name: kirindesk-release-candidate
+    rules:
+      - alert: KirinDeskApiUnavailable
+        expr: up{job="kirindesk-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: KirinDesk API is unavailable
+          runbook: docs/stage-3-release-candidate.md#告警处置
+
+      - alert: KirinDeskErrorBudgetFastBurn
+        expr: |
+          sum(rate(kirindesk_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(kirindesk_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Five-minute server error ratio exceeds 5%
+          runbook: docs/stage-3-release-candidate.md#告警处置
+
+      - alert: KirinDeskApiP95LatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(kirindesk_http_request_duration_seconds_bucket[10m]))
+          ) > 0.75
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: API p95 latency exceeds 750ms
+          runbook: docs/stage-3-release-candidate.md#告警处置

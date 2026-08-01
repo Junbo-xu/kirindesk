@@ -5,12 +5,14 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { Request } from 'express';
 import { LoginRateLimit, LoginRateLimitGuard } from './login-rate-limit.guard';
 import { RbacService } from '../rbac/rbac.service';
+import { WorkflowReleaseModeService } from '../release/workflow-release-mode.service';
 
 @Controller('api/auth')
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly rbac: RbacService,
+    private readonly releaseMode: WorkflowReleaseModeService,
   ) {}
 
   @Post('login')
@@ -50,6 +52,7 @@ export class AuthController {
       email: user.email,
       tenantId: user.tenantId,
       permissions: Object.fromEntries(permissions),
+      workflowMode: this.releaseMode.mode,
     };
   }
 }

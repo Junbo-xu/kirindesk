@@ -59,8 +59,15 @@ describe('Auth smoke + audit (integration)', () => {
       .set('Authorization', `Bearer ${tenantToken}`);
     expect(res.status).toBe(200);
     expect(res.body.email).toBe(TEST_USER_EMAIL);
-    expect(Object.keys(res.body).sort()).toEqual(['email', 'id', 'permissions', 'tenantId']);
+    expect(Object.keys(res.body).sort()).toEqual([
+      'email',
+      'id',
+      'permissions',
+      'tenantId',
+      'workflowMode',
+    ]);
     expect(res.body.permissions['workbench:view']).toBe('all');
+    expect(res.body.workflowMode).toBe('active');
   });
 
   it('platform login with correct credentials returns 200 + accessToken', async () => {

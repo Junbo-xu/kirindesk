@@ -118,6 +118,7 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       API_PORT: '3001'
+      WORKFLOW_RELEASE_MODE: ${WORKFLOW_RELEASE_MODE:-active}
       # App-role connection ONLY — never the superuser DATABASE_URL.
       APP_DATABASE_URL: ${APP_DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
@@ -197,10 +198,28 @@ services:
     networks:
       - internal
 
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ['observability']
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - kirindesk_prometheus:/prometheus
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+
 volumes:
   kirindesk_pgdata:
   kirindesk_redis:
   kirindesk_minio:
+  kirindesk_prometheus:
 
 networks:
   internal:

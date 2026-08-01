@@ -688,9 +688,7 @@ export class FinanceService {
           receipts: facts.receipts.map((source) => this.sourceResponse(source)),
           purchase_costs: facts.costs.map((source) => this.sourceResponse(source)),
           expenses: facts.expenses.map((source) => this.sourceResponse(source)),
-          after_sales_adjustments: facts.adjustments.map((source) =>
-            this.sourceResponse(source),
-          ),
+          after_sales_adjustments: facts.adjustments.map((source) => this.sourceResponse(source)),
         },
         finance_reviews: financeReviews,
         profit_snapshots: profitSnapshots,

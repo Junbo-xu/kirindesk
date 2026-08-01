@@ -58,7 +58,7 @@ KirinDesk uses dual JWT secrets and server-side session records for tenant/platf
 
 ## Quality Gate
 
-Run `pnpm verify:fast` during development and `pnpm verify:full` before review. The full gate requires isolated PostgreSQL/Redis/MinIO services and Chromium. See `docs/quality-gate.md` for the exact test-only environment and safety checks.
+Run `pnpm verify:fast` during development, `pnpm verify:full` before review, and `pnpm verify:release` for a release candidate. The full and release gates require isolated PostgreSQL/Redis/MinIO services plus Chromium, Firefox, and WebKit. See `docs/quality-gate.md` and `docs/stage-3-release-candidate.md` for the exact test-only environment, rollback modes, and safety checks.
 
 Dev credentials (local development only, NOT production accounts):
 - Tenant user: `admin@dev.local` / `dev-password-123` (tenant slug: `dev-tenant`)

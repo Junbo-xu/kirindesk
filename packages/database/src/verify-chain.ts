@@ -11,12 +11,12 @@ export function canonicalizeJson(obj: unknown): string {
   }
   const keys = Object.keys(obj as Record<string, unknown>).sort();
   const parts = keys.map(
-    (k) => JSON.stringify(k) + ':' + canonicalizeJson((obj as Record<string, unknown>)[k])
+    (k) => JSON.stringify(k) + ':' + canonicalizeJson((obj as Record<string, unknown>)[k]),
   );
   return '{' + parts.join(',') + '}';
 }
 
-interface AuditLogRow {
+export interface AuditLogRow {
   id: string;
   tenant_id: string | null;
   actor_type: string;
@@ -68,7 +68,7 @@ export async function verifyChain(chainKey: string): Promise<{
 
   const { rows: chains } = await pool.query<{ tenant_id: string | null }>(
     `SELECT tenant_id FROM audit_log_chains WHERE chain_key = $1`,
-    [chainKey]
+    [chainKey],
   );
   if (chains.length === 0) {
     throw new Error(`Chain not found: ${chainKey}`);
@@ -84,7 +84,7 @@ export async function verifyChain(chainKey: string): Promise<{
        FROM audit_logs
        WHERE ${where}
        ORDER BY id ASC`,
-    params
+    params,
   );
 
   let expectedPrev = ZERO_HASH;

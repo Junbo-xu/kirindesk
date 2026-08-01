@@ -3,6 +3,7 @@ export interface MeResponse {
   email: string;
   tenantId: string;
   permissions: Record<string, 'all' | 'assigned' | 'own'>;
+  workflowMode: 'active' | 'read_only' | 'hidden';
 }
 
 export interface WorkbenchTask {
