@@ -11,6 +11,7 @@ import { AppModule } from '../src/app.module';
 import { APP_POOL } from '../src/database/database.module';
 import { withTenantContext } from '../src/database/context';
 import { AuditService } from '../src/audit/audit.service';
+import { BusinessEventsService } from '../src/workbench/business-events.service';
 import { BusinessExceptionsService } from '../src/workbench/business-exceptions.service';
 import {
   TEST_PASSWORD,
@@ -107,6 +108,7 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
   let exceptions: BusinessExceptionsService;
+  let events: BusinessEventsService;
   let audit: AuditService;
   const tokens = new Map<string, string>();
   const exceptionIds: string[] = [];
@@ -214,6 +216,8 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
          VALUES
            ($1, 'inquiry', $2, 'proforma_invoice', $3, 'fixture.pi_created',
             'tenant_user', $4, $4, 'inquiries:view'),
+           ($1, 'inquiry', $2, 'sales_order', $5, 'fixture.sales_order_created',
+            'tenant_user', $4, $4, 'inquiries:view'),
            ($1, 'sales_order', $5, 'shipment', $5, 'fixture.shipment_delivered',
             'tenant_user', $4, $4, 'orders:view')`,
         [TEST_TENANT_ID, CHAIN_INQUIRY_ID, CHAIN_PI_ID, BUSINESS_USER_ID, CHAIN_SALES_ORDER_ID],
@@ -228,6 +232,7 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
     await app.init();
     pool = app.get<Pool>(APP_POOL);
     exceptions = app.get(BusinessExceptionsService);
+    events = app.get(BusinessEventsService);
     audit = app.get(AuditService);
 
     tokens.set('admin', await login(TEST_USER_EMAIL));
@@ -476,6 +481,114 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
     expect(procurement.status).toBe(200);
     expect(JSON.stringify(procurement.body)).not.toContain('fixture.pi_created');
     expect(JSON.stringify(procurement.body)).not.toContain('fixture.shipment_delivered');
+  });
+
+  it('blocks invisible edges from bridging a multi-hop credential chain', async () => {
+    const inquiryId = randomUUID();
+    const orderId = randomUUID();
+    const purchaseOrderId = randomUUID();
+    const businessExceptionId = randomUUID();
+    const proformaInvoiceId = randomUUID();
+    const financeReviewId = randomUUID();
+
+    await withTenantContext(
+      pool,
+      {
+        tenantId: TEST_TENANT_ID,
+        userId: BUSINESS_USER_ID,
+        actorType: 'tenant_user',
+      },
+      async (client) => {
+        for (const input of [
+          {
+            chainType: 'inquiry',
+            chainId: inquiryId,
+            credentialType: 'proforma_invoice',
+            credentialId: proformaInvoiceId,
+            eventType: 'proforma_invoice.issued',
+            actorId: BUSINESS_USER_ID,
+            visibilityPermission: 'inquiries:view',
+          },
+          {
+            chainType: 'inquiry',
+            chainId: inquiryId,
+            credentialType: 'sales_order',
+            credentialId: orderId,
+            eventType: 'sales_order.created_from_pi',
+            actorId: BUSINESS_USER_ID,
+            visibilityPermission: 'inquiries:view',
+          },
+          {
+            chainType: 'sales_order',
+            chainId: orderId,
+            credentialType: 'purchase_order',
+            credentialId: purchaseOrderId,
+            eventType: 'purchase_order.created',
+            actorId: PROCUREMENT_USER_ID,
+            visibilityPermission: 'procurement:view',
+          },
+          {
+            chainType: 'purchase_order',
+            chainId: purchaseOrderId,
+            credentialType: 'business_exception',
+            credentialId: businessExceptionId,
+            eventType: 'business_exception.opened',
+            actorId: PROCUREMENT_USER_ID,
+            visibilityPermission: 'business_exceptions:view',
+          },
+          {
+            chainType: 'sales_order',
+            chainId: orderId,
+            credentialType: 'finance_review',
+            credentialId: financeReviewId,
+            eventType: 'finance_review.verified',
+            actorId: FINANCE_USER_ID,
+            visibilityPermission: 'finance_reviews:view',
+          },
+        ]) {
+          await events.recordInTransaction(client, {
+            tenantId: TEST_TENANT_ID,
+            ...input,
+            actorType: 'tenant_user',
+            scopeUserId: BUSINESS_USER_ID,
+          });
+        }
+      },
+    );
+
+    for (const [chainType, chainId] of [
+      ['inquiry', inquiryId],
+      ['business_exception', businessExceptionId],
+    ]) {
+      const response = await request(app.getHttpServer())
+        .get(`/api/business-events?chainType=${chainType}&chainId=${chainId}&pageSize=100`)
+        .set(bearer(tokens.get('admin')!));
+      expect(response.status).toBe(200);
+      expect(response.body.data.map((event: { eventType: string }) => event.eventType)).toEqual(
+        expect.arrayContaining([
+          'proforma_invoice.issued',
+          'sales_order.created_from_pi',
+          'purchase_order.created',
+          'business_exception.opened',
+          'finance_review.verified',
+        ]),
+      );
+    }
+
+    const business = await request(app.getHttpServer())
+      .get(`/api/business-events?chainType=inquiry&chainId=${inquiryId}&pageSize=100`)
+      .set(bearer(tokens.get('Workbench Business')!));
+    expect(business.status).toBe(200);
+    expect(business.body.data.map((event: { eventType: string }) => event.eventType)).toEqual(
+      expect.arrayContaining(['proforma_invoice.issued', 'sales_order.created_from_pi']),
+    );
+    expect(
+      business.body.data.some((event: { eventType: string }) =>
+        ['purchase_order.created', 'business_exception.opened', 'finance_review.verified'].includes(
+          event.eventType,
+        ),
+      ),
+    ).toBe(false);
   });
 
   it('keeps business events append-only and the tenant audit chain valid', async () => {

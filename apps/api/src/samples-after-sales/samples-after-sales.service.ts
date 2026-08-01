@@ -193,7 +193,7 @@ export class SamplesAfterSalesService {
   private async recordEvent(
     client: PoolClient,
     actor: SamplesAfterSalesActor,
-    chainType: 'inquiry' | 'sales_order',
+    chainType: 'inquiry' | 'sales_order' | 'sample_order',
     chainId: string,
     credentialType: string,
     credentialId: string,
@@ -1127,8 +1127,19 @@ export class SamplesAfterSalesService {
       await this.recordEvent(
         client,
         actor,
-        'sales_order',
-        ids.sales_order_id,
+        'sample_order',
+        sample.id,
+        'inquiry',
+        ids.inquiry_id,
+        'inquiry.created_from_sample',
+        sample.owner_user_id,
+        'sample_orders:view',
+      );
+      await this.recordEvent(
+        client,
+        actor,
+        'inquiry',
+        ids.inquiry_id,
         'sales_order',
         ids.sales_order_id,
         'sales_order.created_from_sample',

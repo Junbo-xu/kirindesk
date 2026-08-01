@@ -427,6 +427,40 @@ describe('Stage 2F samples and after-sales (integration)', () => {
     });
   });
 
+  it('aggregates a converted sample chain from either credential without sensitive fields', async () => {
+    for (const [chainType, chainId] of [
+      ['sample_order', sampleId],
+      ['sales_order', convertedOrderId],
+    ]) {
+      const timeline = await request(app.getHttpServer())
+        .get(`/api/business-events?chainType=${chainType}&chainId=${chainId}&pageSize=100`)
+        .set(bearer(adminToken));
+      expect(timeline.status, JSON.stringify(timeline.body)).toBe(200);
+      expect(timeline.body.data.map((event: { eventType: string }) => event.eventType)).toEqual(
+        expect.arrayContaining([
+          'sample_order.created',
+          'inquiry.created_from_sample',
+          'sales_order.created_from_sample',
+        ]),
+      );
+      const serialized = JSON.stringify(timeline.body);
+      for (const forbidden of [
+        'Original frozen customer request',
+        'Customer warehouse, Berlin',
+        'Full payment before production',
+        'confidential source',
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    }
+
+    const tenant2 = await request(app.getHttpServer())
+      .get(`/api/business-events?chainType=sample_order&chainId=${sampleId}&pageSize=100`)
+      .set(bearer(tenant2Token));
+    expect(tenant2.status).toBe(200);
+    expect(tenant2.body.data).toEqual([]);
+  });
+
   it('enforces frozen multi-level approval and appends finance revisions without mutation', async () => {
     await withAdmin(async (client) => {
       const sourceSnapshot = {

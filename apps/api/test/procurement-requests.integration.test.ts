@@ -626,7 +626,7 @@ describe('Stage 2C procurement requests (integration)', () => {
         [orderId],
       );
       const exception = await client.query(
-        `SELECT exception_type, status FROM business_exceptions
+        `SELECT id, exception_type, status FROM business_exceptions
           WHERE context_type = 'purchase_order' AND context_id = $1`,
         [orderId],
       );
@@ -648,7 +648,7 @@ describe('Stage 2C procurement requests (integration)', () => {
       variance_bps: 1000,
       variance_status: 'exception',
     });
-    expect(evidence.exception).toEqual({ exception_type: 'price_variance', status: 'open' });
+    expect(evidence.exception).toMatchObject({ exception_type: 'price_variance', status: 'open' });
     expect(evidence.audit.map((row: { action: string }) => row.action)).toContain(
       'purchase_order.placed',
     );
@@ -658,6 +658,25 @@ describe('Stage 2C procurement requests (integration)', () => {
     expect(evidence.audit.map((row: { action: string }) => row.action)).toContain(
       'business_exception.opened',
     );
+
+    for (const [chainType, chainId] of [
+      ['sales_order', SALES_ORDER_ID],
+      ['business_exception', evidence.exception.id as string],
+    ]) {
+      const timeline = await request(app.getHttpServer())
+        .get(`/api/business-events?chainType=${chainType}&chainId=${chainId}&pageSize=100`)
+        .set(bearer(adminToken));
+      expect(timeline.status, JSON.stringify(timeline.body)).toBe(200);
+      expect(timeline.body.data.map((event: { eventType: string }) => event.eventType)).toEqual(
+        expect.arrayContaining([
+          'procurement_request.created',
+          'purchase_order.generated',
+          'purchase_order.placed',
+          'business_exception.opened',
+        ]),
+      );
+      expect(JSON.stringify(timeline.body)).not.toContain('Supplier repriced');
+    }
     expect((await verifyChain(`tenant:${TEST_TENANT_ID}`)).ok).toBe(true);
   });
 });
