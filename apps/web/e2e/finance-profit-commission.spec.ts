@@ -446,6 +446,41 @@ test('finance completes append-only review, final profit, commission lock, and r
   await reviseCandidate.click();
   await expect(page.getByTestId('commission-history')).toContainText('v2');
   await expect(page.getByTestId('commission-history')).toContainText('客户售后调整，追加重算');
+
+  await page.getByLabel('打回原因').fill('追加财务复核，令未锁定候选过期');
+  await page.getByRole('button', { name: '打回', exact: true }).click();
+  await expect(page.getByTestId('finance-review-history')).toContainText('v3');
+  await expect(page.getByTestId('finance-review-history')).toContainText(
+    '追加财务复核，令未锁定候选过期',
+  );
+
+  await page.getByLabel('客户收款汇率', { exact: true }).fill('7.12345678');
+  await page.getByLabel('客户收款汇率来源', { exact: true }).fill('E2E bank advice');
+  await page.getByLabel('客户收款汇率时间', { exact: true }).fill('2026-07-31T08:00');
+  await page.getByLabel('采购成本汇率', { exact: true }).fill('7');
+  await page.getByLabel('采购成本汇率来源', { exact: true }).fill('E2E bank advice');
+  await page.getByLabel('采购成本汇率时间', { exact: true }).fill('2026-07-31T08:00');
+  await page.getByRole('button', { name: '核对通过' }).click();
+  await expect(page.getByTestId('finance-review-history')).toContainText('v4');
+
+  await page.getByRole('button', { name: '生成最终利润' }).click();
+  await expect(page.getByTestId('stale-commission-candidate')).toContainText(
+    '当前候选基于旧利润快照',
+  );
+  await expect(page.getByRole('button', { name: '锁定候选' })).toHaveCount(0);
+
+  await page.getByLabel('销售提成人员').selectOption(salesParticipantId);
+  await page.getByLabel('采购提成人员').selectOption(procurementParticipantId);
+  await page.getByLabel('修订原因').fill('新利润已生成，恢复未锁定候选');
+  await page.getByRole('button', { name: '恢复并追加版本' }).click();
+  await expect(page.getByTestId('commission-history')).toContainText('v3');
+  await expect(page.getByTestId('commission-history')).toContainText(
+    '新利润已生成，恢复未锁定候选',
+  );
+
+  await page.getByLabel('锁定备注').fill('E2E 恢复链锁定');
+  await page.getByRole('button', { name: '锁定候选' }).click();
+  await expect(page.getByTestId('commission-history')).toContainText('locked');
 });
 
 test('sales role cannot navigate to or directly open finance', async ({ page }) => {

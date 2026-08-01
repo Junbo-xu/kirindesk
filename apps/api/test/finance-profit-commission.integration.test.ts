@@ -674,6 +674,24 @@ describe('Stage 2E finance, profit, and commission (integration)', () => {
       net_profit_rmb: '3513.45',
     });
 
+    const staleReplacementMissingReason = await request(app.getHttpServer())
+      .post(`/api/finance/orders/${ids.order}/commission-candidates`)
+      .set(bearer(adminToken))
+      .send({
+        allocations: [
+          {
+            role_type: 'sales',
+            participants: [{ user_id: ids.salesParticipant, share_bps: 10000 }],
+          },
+          {
+            role_type: 'procurement',
+            participants: [{ user_id: ids.procurementParticipant, share_bps: 10000 }],
+          },
+        ],
+      });
+    expect(staleReplacementMissingReason.status).toBe(400);
+    expect(staleReplacementMissingReason.body.code).toBe('COMMISSION_REVISION_REASON_REQUIRED');
+
     const obsoleteProfitLock = await request(app.getHttpServer())
       .post(`/api/finance/commission-candidates/${secondCandidateId}/lock`)
       .set(bearer(adminToken))

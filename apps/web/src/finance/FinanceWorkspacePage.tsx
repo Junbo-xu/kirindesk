@@ -99,6 +99,15 @@ export function FinanceWorkspacePage() {
   );
   const latestProfit = detail?.profit_snapshots[0] ?? null;
   const latestCandidate = detail?.commission_candidates[0] ?? null;
+  const candidateIsStale = Boolean(
+    latestCandidate && latestProfit && latestCandidate.profit_snapshot_id !== latestProfit.id,
+  );
+  const candidateRevisionRequired = Boolean(
+    latestCandidate && (latestCandidate.status === 'locked' || candidateIsStale),
+  );
+  const candidateCalculationBlocked = Boolean(
+    latestCandidate && latestCandidate.status === 'calculated' && !candidateIsStale,
+  );
 
   async function loadOrder(id: string) {
     if (!id) {
@@ -277,14 +286,14 @@ export function FinanceWorkspacePage() {
       setError('销售和采购的人员比例必须分别合计 100%，且人员不能重复');
       return;
     }
-    if (latestCandidate?.status === 'locked' && !revisionReason.trim()) {
-      setError('锁定后的修订必须填写原因');
+    if (candidateRevisionRequired && !revisionReason.trim()) {
+      setError(candidateIsStale ? '恢复过期候选必须填写修订原因' : '锁定后的修订必须填写原因');
       return;
     }
     void run(() =>
       apiClient.calculateFinanceCommissionCandidate(orderId, {
         allocations: mapped,
-        revision_reason: latestCandidate?.status === 'locked' ? revisionReason : undefined,
+        revision_reason: candidateRevisionRequired ? revisionReason : undefined,
       }),
     );
   }
@@ -666,7 +675,12 @@ export function FinanceWorkspacePage() {
                   </div>
                 ))}
 
-                {latestCandidate?.status === 'locked' && (
+                {candidateIsStale && (
+                  <p className="finance-alert" data-testid="stale-commission-candidate">
+                    当前候选基于旧利润快照，不能锁定；请填写修订原因并追加恢复版本。
+                  </p>
+                )}
+                {candidateRevisionRequired && (
                   <label className="finance-field">
                     修订原因
                     <textarea
@@ -680,14 +694,19 @@ export function FinanceWorkspacePage() {
                   <button
                     className="finance-button"
                     type="button"
-                    disabled={busy}
+                    disabled={busy || candidateCalculationBlocked}
                     onClick={calculateCandidate}
                   >
-                    {latestCandidate?.status === 'locked' ? '追加修订版本' : '计算提成候选'}
+                    {candidateIsStale
+                      ? '恢复并追加版本'
+                      : latestCandidate?.status === 'locked'
+                        ? '追加修订版本'
+                        : '计算提成候选'}
                   </button>
                 )}
 
                 {latestCandidate?.status === 'calculated' &&
+                  !candidateIsStale &&
                   hasPermission('commission_candidates:lock') && (
                     <div className="finance-actions">
                       <input

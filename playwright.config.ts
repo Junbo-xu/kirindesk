@@ -45,7 +45,8 @@ export default defineConfig({
       },
     },
     {
-      command: 'pnpm --filter @kirindesk/web exec vite --host 127.0.0.1 --port 4173',
+      command:
+        'pnpm --filter @kirindesk/web exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
       url: 'http://127.0.0.1:4173/login',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,

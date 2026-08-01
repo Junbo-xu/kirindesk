@@ -1067,7 +1067,7 @@ export class FinanceService {
       }
       if (previous && !dto.revision_reason?.trim()) {
         throw new InvalidFinanceDataException(
-          'A revision reason is required after a candidate has been locked',
+          'A revision reason is required when replacing an existing candidate',
           'COMMISSION_REVISION_REASON_REQUIRED',
         );
       }
