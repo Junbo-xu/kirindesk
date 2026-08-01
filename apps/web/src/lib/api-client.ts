@@ -96,6 +96,12 @@ import {
   FinanceConversionInput,
   FinanceOrderDetail,
   FinanceOrderSummary,
+  AfterSalesApprovalConfig,
+  AfterSalesCase,
+  CreateAfterSalesCaseInput,
+  CreateSampleOrderInput,
+  ExecuteAfterSalesInput,
+  SampleOrder,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -839,6 +845,127 @@ export const apiClient = {
     return request<CommissionCandidateV2>(`/api/finance/commission-candidates/${id}/lock`, {
       method: 'POST',
       body: { comment },
+    });
+  },
+
+  listSampleOrders(): Promise<SampleOrder[]> {
+    return request<SampleOrder[]>('/api/sample-orders');
+  },
+  getSampleOrder(id: string): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}`);
+  },
+  createSampleOrder(input: CreateSampleOrderInput): Promise<SampleOrder> {
+    return request<SampleOrder>('/api/sample-orders', { method: 'POST', body: input });
+  },
+  submitSampleOrder(id: string): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/submit`, { method: 'POST' });
+  },
+  decideSampleOrder(
+    id: string,
+    decision: 'approved' | 'rejected',
+    reason?: string,
+  ): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/decision`, {
+      method: 'POST',
+      body: { decision, reason },
+    });
+  },
+  dispatchSampleOrder(
+    id: string,
+    input: { carrier: string; tracking_number: string; dispatched_at: string },
+  ): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/dispatch`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  deliverSampleOrder(
+    id: string,
+    input: { received_by: string; delivered_at: string },
+  ): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/deliver`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  confirmSampleOrder(id: string, feedback: string): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/confirm`, {
+      method: 'POST',
+      body: { feedback },
+    });
+  },
+  convertSampleOrder(
+    id: string,
+    input: {
+      payment_terms: string;
+      items: Array<{ sample_item_id: string; quantity: string }>;
+    },
+  ): Promise<{ sample_order: SampleOrder; gate: unknown }> {
+    return request<{ sample_order: SampleOrder; gate: unknown }>(
+      `/api/sample-orders/${id}/convert`,
+      {
+        method: 'POST',
+        body: input,
+      },
+    );
+  },
+  closeSampleOrder(id: string, reason: string): Promise<SampleOrder> {
+    return request<SampleOrder>(`/api/sample-orders/${id}/close`, {
+      method: 'POST',
+      body: { reason },
+    });
+  },
+
+  listAfterSalesCases(): Promise<AfterSalesCase[]> {
+    return request<AfterSalesCase[]>('/api/after-sales-cases');
+  },
+  getAfterSalesCase(id: string): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/after-sales-cases/${id}`);
+  },
+  createAfterSalesCase(
+    salesOrderId: string,
+    input: CreateAfterSalesCaseInput,
+  ): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/sales-orders/${salesOrderId}/after-sales-cases`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  submitAfterSalesCase(id: string): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/after-sales-cases/${id}/submit`, { method: 'POST' });
+  },
+  decideAfterSalesCase(
+    id: string,
+    decision: 'approved' | 'rejected',
+    reason?: string,
+  ): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/after-sales-cases/${id}/decisions`, {
+      method: 'POST',
+      body: { decision, reason },
+    });
+  },
+  startAfterSalesCase(id: string): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/after-sales-cases/${id}/start`, { method: 'POST' });
+  },
+  executeAfterSalesCase(
+    id: string,
+    input: ExecuteAfterSalesInput,
+  ): Promise<{ case: AfterSalesCase; revision: unknown }> {
+    return request<{ case: AfterSalesCase; revision: unknown }>(
+      `/api/after-sales-cases/${id}/execute`,
+      { method: 'POST', body: input },
+    );
+  },
+  closeAfterSalesCase(id: string): Promise<AfterSalesCase> {
+    return request<AfterSalesCase>(`/api/after-sales-cases/${id}/close`, { method: 'POST' });
+  },
+  getAfterSalesApprovalConfig(): Promise<AfterSalesApprovalConfig> {
+    return request<AfterSalesApprovalConfig>('/api/after-sales/approval-config');
+  },
+  replaceAfterSalesApprovalConfig(approverUserIds: string[]): Promise<AfterSalesApprovalConfig> {
+    return request<AfterSalesApprovalConfig>('/api/after-sales/approval-config', {
+      method: 'PUT',
+      body: { steps: approverUserIds.map((approver_user_id) => ({ approver_user_id })) },
     });
   },
 

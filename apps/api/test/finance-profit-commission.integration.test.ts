@@ -721,6 +721,7 @@ describe('Stage 2E finance, profit, and commission (integration)', () => {
       supersedes_id: secondCandidateId,
       profit_snapshot_id: replacementProfit.body.id,
       status: 'calculated',
+      is_current: true,
     });
 
     const replacementLock = await request(app.getHttpServer())

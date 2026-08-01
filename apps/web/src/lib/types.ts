@@ -1307,7 +1307,11 @@ export interface SignupResult {
   };
 }
 
-export type FinanceSourceType = 'customer_receipt' | 'purchase_cost' | 'order_expense';
+export type FinanceSourceType =
+  | 'customer_receipt'
+  | 'purchase_cost'
+  | 'order_expense'
+  | 'after_sales_adjustment';
 export type CommissionRoleType = 'sales' | 'procurement';
 export type CommissionBasisType = 'sales_revenue' | 'gross_profit' | 'net_profit';
 
@@ -1435,6 +1439,7 @@ export interface CommissionCandidateV2 {
   created_by: string;
   created_at: string;
   status: 'calculated' | 'locked';
+  is_current: boolean;
   lock: {
     id: string;
     locked_by: string;
@@ -1452,6 +1457,7 @@ export interface FinanceOrderDetail {
     receipts: FinanceSource[];
     purchase_costs: FinanceSource[];
     expenses: FinanceSource[];
+    after_sales_adjustments: FinanceSource[];
   };
   finance_reviews: FinanceReview[];
   profit_snapshots: ProfitSnapshot[];
@@ -1476,6 +1482,201 @@ export interface CommissionAllocationInput {
 export interface CalculateCommissionCandidateInput {
   allocations: CommissionAllocationInput[];
   revision_reason?: string;
+}
+
+export type SampleOrderStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'dispatched'
+  | 'delivered'
+  | 'confirmed'
+  | 'converted'
+  | 'closed';
+
+export interface SampleOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  specifications: string | null;
+  sample_quantity: string;
+  maximum_conversion_quantity: string;
+  unit: string;
+  sales_currency: Currency;
+  sales_unit_price: string;
+  margin_status: string;
+  supplier_id?: string;
+  purchase_unit_cost?: string;
+  purchase_to_sales_fx_rate?: string;
+  fx_rate_source?: string;
+  fx_captured_at?: string;
+  source_selection_id?: string;
+  source_snapshot?: Record<string, unknown>;
+}
+
+export interface SampleOrder {
+  id: string;
+  inquiry_id: string;
+  customer_id: string;
+  owner_user_id: string;
+  sample_number: string;
+  status: SampleOrderStatus;
+  recipient: { name: string; phone: string; address: string; country: string };
+  shipping_fee: string;
+  shipping_currency: Currency;
+  note: string | null;
+  items: SampleOrderItem[];
+  approval: {
+    id: string;
+    decision: 'approved' | 'rejected';
+    reason: string | null;
+    decided_by: string;
+    created_at: string;
+  } | null;
+  shipment: {
+    id: string;
+    carrier: string;
+    tracking_number: string;
+    dispatched_by: string;
+    dispatched_at: string;
+    created_at: string;
+  } | null;
+  delivery: {
+    id: string;
+    shipment_id: string;
+    received_by: string;
+    delivered_at: string;
+    confirmed_by: string;
+    created_at: string;
+  } | null;
+  feedback: {
+    id: string;
+    feedback: string;
+    confirmed_by: string;
+    confirmed_at: string;
+    created_at: string;
+  } | null;
+  conversion: {
+    id: string;
+    inquiry_id: string;
+    proforma_invoice_id: string;
+    sales_order_id: string;
+    snapshot: Record<string, unknown>;
+    converted_by: string;
+    created_at: string;
+  } | null;
+  closure: {
+    id: string;
+    reason: string;
+    closed_by: string;
+    created_at: string;
+  } | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSampleOrderInput {
+  inquiry_id: string;
+  recipient_name: string;
+  recipient_phone: string;
+  recipient_address: string;
+  recipient_country: string;
+  shipping_fee: string;
+  shipping_currency: Currency;
+  note?: string;
+  items: Array<{ selection_id: string; quantity: string }>;
+}
+
+export type AfterSalesCaseStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'executing'
+  | 'completed'
+  | 'closed';
+
+export interface AfterSalesApprovalStep {
+  id: string;
+  step_no: number;
+  approver_user_id: string;
+  decision: 'approved' | 'rejected' | null;
+  decided_by: string | null;
+  reason: string | null;
+  decided_at: string | null;
+  status: 'current' | 'waiting' | 'approved' | 'rejected';
+}
+
+export interface AfterSalesAdjustment {
+  id: string;
+  adjustment_type: 'refund' | 'compensation';
+  amount: string;
+  currency: Currency;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+  amount_rmb: string;
+  external_reference: string;
+  proof_file_id: string | null;
+  executed_by: string;
+  created_at: string;
+}
+
+export interface AfterSalesCase {
+  id: string;
+  sales_order_id: string;
+  order_number: string;
+  shipment_id: string | null;
+  case_number: string;
+  case_type: 'refund' | 'compensation';
+  responsibility: 'supplier' | 'logistics' | 'company' | 'customer' | 'undetermined';
+  reason: string;
+  requested_amount: string;
+  currency: Currency;
+  proof_file_id: string | null;
+  status: AfterSalesCaseStatus;
+  requested_by: string;
+  approval_config: { id: string; version: number };
+  current_approval_step: number | null;
+  approval_steps: AfterSalesApprovalStep[];
+  adjustment: AfterSalesAdjustment | null;
+  completed_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AfterSalesApprovalConfig {
+  id: string;
+  version: number;
+  created_at?: string;
+  steps: Array<{
+    id: string;
+    step_no: number;
+    approver_user_id: string;
+    approver_name: string;
+  }>;
+}
+
+export interface CreateAfterSalesCaseInput {
+  shipment_id?: string;
+  case_type: 'refund' | 'compensation';
+  responsibility: 'supplier' | 'logistics' | 'company' | 'customer' | 'undetermined';
+  reason: string;
+  requested_amount: string;
+  currency: Currency;
+  proof_file_id?: string;
+}
+
+export interface ExecuteAfterSalesInput {
+  amount: string;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+  external_reference: string;
+  proof_file_id?: string;
 }
 
 // Normalized API error thrown by the client for non-2xx responses.

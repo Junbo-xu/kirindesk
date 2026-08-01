@@ -189,9 +189,11 @@ export class InquiriesService {
             ORDER BY created_at DESC, id DESC`,
           params,
         );
-        return Promise.all(
-          result.rows.map(async (row) => toInquiryResponse(row, await this.items(client, row.id))),
-        );
+        const inquiries: InquiryResponse[] = [];
+        for (const row of result.rows) {
+          inquiries.push(toInquiryResponse(row, await this.items(client, row.id)));
+        }
+        return inquiries;
       },
     );
   }

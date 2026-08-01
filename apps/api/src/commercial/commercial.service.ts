@@ -102,6 +102,16 @@ interface OrderContext {
   status: string;
 }
 
+export interface NewCommercialOrderContext {
+  id: string;
+  inquiry_id: string;
+  proforma_invoice_id: string;
+  owner_user_id: string;
+  total_amount: string;
+  currency: string;
+  status: string;
+}
+
 interface ReceiptRow {
   id: string;
   proforma_invoice_id: string;
@@ -1605,6 +1615,20 @@ export class CommercialService {
       visibilityPermission: 'procurement_gate:view',
     });
     return gate;
+  }
+
+  async evaluateNewOrderGateInTransaction(
+    client: PoolClient,
+    actor: CommercialActor,
+    order: NewCommercialOrderContext,
+  ) {
+    const gate = await this.evaluateGateInTransaction(
+      client,
+      actor,
+      order,
+      await this.readSettings(client),
+    );
+    return this.gateResponse(gate);
   }
 
   private gateResponse(row: GateRow) {

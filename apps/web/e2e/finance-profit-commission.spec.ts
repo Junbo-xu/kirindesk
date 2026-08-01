@@ -379,7 +379,7 @@ test.beforeAll(async ({ request }) => {
   orderNumber = financeOrder.order_number;
 });
 
-test('finance completes append-only review, final profit, commission lock, and revision', async ({
+test('finance completes lock, revision, and obsolete unlocked candidate replacement', async ({
   page,
 }) => {
   await loginPage(page, ADMIN_EMAIL);

@@ -11,5 +11,6 @@ import { FinanceService } from './finance.service';
   imports: [AuthModule, RbacModule, SubscriptionModule, AuditModule, WorkbenchModule],
   controllers: [FinanceController],
   providers: [FinanceService],
+  exports: [FinanceService],
 })
 export class FinanceModule {}

@@ -52,6 +52,8 @@ import { QuoteTasksPage } from './workbench/QuoteTasksPage';
 import { CommercialFlowPage } from './commercial/CommercialFlowPage';
 import { FulfillmentPage } from './fulfillment/FulfillmentPage';
 import { FinanceWorkspacePage } from './finance/FinanceWorkspacePage';
+import { SampleOrdersPage } from './samples-after-sales/SampleOrdersPage';
+import { AfterSalesPage } from './samples-after-sales/AfterSalesPage';
 
 function sensitive(element: React.ReactNode) {
   return <SensitivePageWatermark>{element}</SensitivePageWatermark>;
@@ -92,6 +94,12 @@ export function App() {
               </Route>
               <Route element={<PermissionRoute permission="fulfillment:view" />}>
                 <Route path="/fulfillment" element={sensitive(<FulfillmentPage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="sample_orders:view" />}>
+                <Route path="/samples" element={sensitive(<SampleOrdersPage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="after_sales:view" />}>
+                <Route path="/after-sales" element={sensitive(<AfterSalesPage />)} />
               </Route>
               <Route element={<PermissionRoute permission="finance_reviews:view" />}>
                 <Route path="/finance" element={sensitive(<FinanceWorkspacePage />)} />

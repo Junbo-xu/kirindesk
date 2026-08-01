@@ -55,6 +55,7 @@ function money(value: string | null | undefined): string {
 function sourceName(source: FinanceSource): string {
   if (source.subject_type === 'customer_receipt') return '客户收款';
   if (source.subject_type === 'purchase_cost') return '采购成本';
+  if (source.subject_type === 'after_sales_adjustment') return '售后退款/赔偿';
   const labels: Record<string, string> = {
     freight: '运费',
     insurance: '保险费',
@@ -93,6 +94,7 @@ export function FinanceWorkspacePage() {
             ...detail.source_state.receipts,
             ...detail.source_state.purchase_costs,
             ...detail.source_state.expenses,
+            ...detail.source_state.after_sales_adjustments,
           ]
         : [],
     [detail],
@@ -685,6 +687,7 @@ export function FinanceWorkspacePage() {
                     修订原因
                     <textarea
                       className="finance-textarea"
+                      aria-label="修订原因"
                       value={revisionReason}
                       onChange={(event) => setRevisionReason(event.target.value)}
                     />

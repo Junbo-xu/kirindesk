@@ -36,7 +36,11 @@ interface SalesOrderRow {
   status: string;
 }
 
-type SubjectType = 'customer_receipt' | 'purchase_cost' | 'order_expense';
+type SubjectType =
+  | 'customer_receipt'
+  | 'purchase_cost'
+  | 'order_expense'
+  | 'after_sales_adjustment';
 
 interface SourceFact {
   subject_type: SubjectType;
@@ -56,9 +60,31 @@ interface SourceFacts {
   receipts: SourceFact[];
   costs: SourceFact[];
   expenses: SourceFact[];
+  adjustments: SourceFact[];
   missing: string[];
   fingerprint: string;
   snapshot: Record<string, unknown>;
+}
+
+export interface AfterSalesAdjustmentRevisionInput {
+  caseId: string;
+  caseNumber: string;
+  caseType: 'refund' | 'compensation';
+  salesOrderId: string;
+  amount: string;
+  currency: string;
+  fxRateToRmb: string;
+  fxSource: string;
+  fxCapturedAt: Date;
+  externalReference: string;
+  proofFileId: string | null;
+}
+
+export interface AfterSalesAdjustmentRevisionResult {
+  adjustment: object;
+  finance_review: object;
+  profit_snapshot: object;
+  commission_candidate: object;
 }
 
 interface ReviewItemInput {
@@ -377,6 +403,54 @@ export class FinanceService {
       },
     }));
 
+    const adjustmentRows = await client.query<{
+      id: string;
+      case_id: string;
+      case_number: string;
+      adjustment_type: 'refund' | 'compensation';
+      amount: string;
+      currency: string;
+      fx_rate_to_rmb: string;
+      fx_source: string;
+      fx_captured_at: Date;
+      amount_rmb: string;
+      external_reference: string;
+      proof_file_id: string | null;
+      executed_by: string;
+      created_at: Date;
+    }>(
+      `SELECT adjustment.id, adjustment.case_id, cases.case_number,
+              adjustment.adjustment_type, adjustment.amount::text AS amount,
+              adjustment.currency,
+              adjustment.fx_rate_to_rmb::text AS fx_rate_to_rmb,
+              adjustment.fx_source, adjustment.fx_captured_at,
+              adjustment.amount_rmb::text AS amount_rmb,
+              adjustment.external_reference, adjustment.proof_file_id,
+              adjustment.executed_by, adjustment.created_at
+         FROM after_sales_adjustments adjustment
+         JOIN after_sales_cases cases
+           ON cases.id = adjustment.case_id AND cases.tenant_id = adjustment.tenant_id
+        WHERE adjustment.sales_order_id = $1
+        ORDER BY adjustment.created_at, adjustment.id`,
+      [order.id],
+    );
+    const adjustments: SourceFact[] = adjustmentRows.rows.map((row) => ({
+      subject_type: 'after_sales_adjustment',
+      id: row.id,
+      amount: row.amount,
+      currency: row.currency,
+      fx_rate_to_rmb: row.fx_rate_to_rmb,
+      fx_source: row.fx_source,
+      fx_captured_at: row.fx_captured_at,
+      amount_rmb: row.amount_rmb,
+      status: 'complete',
+      snapshot: {
+        ...row,
+        fx_captured_at: row.fx_captured_at.toISOString(),
+        created_at: row.created_at.toISOString(),
+      },
+    }));
+
     const missing: string[] = [];
     if (receipts.length === 0) missing.push('missing_receipt');
     if (
@@ -403,12 +477,14 @@ export class FinanceService {
       receipts: receipts.map((row) => row.snapshot),
       purchase_costs: costs.map((row) => row.snapshot),
       expenses: expenses.map((row) => row.snapshot),
+      after_sales_adjustments: adjustments.map((row) => row.snapshot),
       missing,
     };
     return {
       receipts,
       costs,
       expenses,
+      adjustments,
       missing,
       fingerprint: this.fingerprint(snapshot),
       snapshot,
@@ -449,11 +525,14 @@ export class FinanceService {
   ): Promise<{ items: ReviewItemInput[]; missing: string[] }> {
     const items: ReviewItemInput[] = [];
     const missing = [...facts.missing];
-    const sources = [...facts.receipts, ...facts.costs, ...facts.expenses];
+    const sources = [...facts.receipts, ...facts.costs, ...facts.expenses, ...facts.adjustments];
     const seenConversions = new Set<string>();
 
     for (const source of sources) {
-      if (source.subject_type === 'order_expense') {
+      if (
+        source.subject_type === 'order_expense' ||
+        source.subject_type === 'after_sales_adjustment'
+      ) {
         if (
           source.status !== 'complete' ||
           !source.fx_rate_to_rmb ||
@@ -589,6 +668,18 @@ export class FinanceService {
     return withTenantContext(this.pool, this.context(actor), async (client) => {
       const order = await this.salesOrder(client, actor, orderId);
       const facts = await this.sourceFacts(client, order);
+      const financeReviews = await this.reviewHistory(client, order.id);
+      const profitSnapshots = await this.profitHistory(client, order.id);
+      const latestReview = financeReviews[0] ?? null;
+      const latestProfit = profitSnapshots[0] ?? null;
+      const currentProfitSnapshotId =
+        latestProfit?.status === 'final' &&
+        latestProfit.input_fingerprint === facts.fingerprint &&
+        latestReview?.decision === 'verified' &&
+        latestReview.input_fingerprint === facts.fingerprint &&
+        latestProfit.finance_review_id === latestReview.id
+          ? latestProfit.id
+          : null;
       return {
         order,
         source_state: {
@@ -597,11 +688,18 @@ export class FinanceService {
           receipts: facts.receipts.map((source) => this.sourceResponse(source)),
           purchase_costs: facts.costs.map((source) => this.sourceResponse(source)),
           expenses: facts.expenses.map((source) => this.sourceResponse(source)),
+          after_sales_adjustments: facts.adjustments.map((source) =>
+            this.sourceResponse(source),
+          ),
         },
-        finance_reviews: await this.reviewHistory(client, order.id),
-        profit_snapshots: await this.profitHistory(client, order.id),
+        finance_reviews: financeReviews,
+        profit_snapshots: profitSnapshots,
         commission_rules: await this.latestRules(client),
-        commission_candidates: await this.candidateHistory(client, order.id),
+        commission_candidates: await this.candidateHistory(
+          client,
+          order.id,
+          currentProfitSnapshotId,
+        ),
         participants: (
           await client.query<{ id: string; name: string; email: string }>(
             `SELECT id, name, email FROM users
@@ -819,7 +917,11 @@ export class FinanceService {
           )
           .map((item) => item.amount_rmb!),
       );
-      const refund = '0.00';
+      const refund = addMoney(
+        actualItems
+          .filter((item) => item.subject_type === 'after_sales_adjustment')
+          .map((item) => item.amount_rmb!),
+      );
       const gross = subtractMoney(revenue, cost);
       const net = subtractMoney(gross, freight, otherExpense, refund);
 
@@ -840,14 +942,16 @@ export class FinanceService {
         );
       }
       const previous = latestProfit.rows[0] ?? null;
+      const formulaVersion =
+        facts.adjustments.length > 0 ? 'order_profit_rmb_v2' : 'order_profit_rmb_v1';
       const inputSnapshot = {
-        formula_version: 'order_profit_rmb_v1',
+        formula_version: formulaVersion,
         source_facts: facts.snapshot,
         finance_review: review
           ? { id: review.id, version: review.version, decision: review.decision }
           : null,
         review_items: reviewItems,
-        after_sales_adjustments: [],
+        after_sales_adjustments: facts.adjustments.map((row) => row.snapshot),
       };
       const inserted = await client.query<ProfitRow>(
         `INSERT INTO profit_snapshots
@@ -855,7 +959,7 @@ export class FinanceService {
             formula_version, input_fingerprint, input_snapshot, missing_items,
             revenue_rmb, purchase_cost_rmb, freight_rmb, other_expense_rmb, refund_rmb,
             gross_profit_rmb, net_profit_rmb, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,'order_profit_rmb_v1',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          RETURNING ${PROFIT_COLUMNS}`,
         [
           actor.tenantId,
@@ -864,6 +968,7 @@ export class FinanceService {
           dto.status,
           previous?.id ?? null,
           review?.id ?? null,
+          formulaVersion,
           facts.fingerprint,
           JSON.stringify(inputSnapshot),
           JSON.stringify(missing),
@@ -1014,6 +1119,362 @@ export class FinanceService {
       );
     }
     return profit;
+  }
+
+  async appendAfterSalesAdjustmentInTransaction(
+    client: PoolClient,
+    actor: FinanceActor,
+    input: AfterSalesAdjustmentRevisionInput,
+  ): Promise<AfterSalesAdjustmentRevisionResult> {
+    this.assertAllScope(actor);
+    const order = await this.salesOrder(client, actor, input.salesOrderId, true);
+    if (order.status !== 'settled') {
+      throw new FinanceConflictException(
+        'After-sales execution requires a settled order with a locked commission baseline',
+        'AFTER_SALES_SETTLED_BASELINE_REQUIRED',
+      );
+    }
+    const factsBefore = await this.sourceFacts(client, order);
+    const profit = await this.currentFinalProfit(client, order, factsBefore);
+    const candidateRows = await client.query<CandidateRow>(
+      `SELECT ${CANDIDATE_COLUMNS}
+         FROM commission_candidates_v2 candidate
+         LEFT JOIN commission_candidate_locks_v2 lock ON lock.candidate_id = candidate.id
+        WHERE candidate.sales_order_id = $1
+        ORDER BY candidate.version DESC LIMIT 1`,
+      [order.id],
+    );
+    const candidate = candidateRows.rows[0];
+    if (!candidate || !candidate.lock_id || candidate.profit_snapshot_id !== profit.id) {
+      throw new FinanceConflictException(
+        'The latest commission version must be locked against the current final profit',
+        'AFTER_SALES_LOCKED_COMMISSION_REQUIRED',
+      );
+    }
+    const baseReviewRows = await client.query<ReviewRow>(
+      `SELECT ${REVIEW_COLUMNS} FROM finance_reviews WHERE id = $1`,
+      [profit.finance_review_id],
+    );
+    const baseReview = baseReviewRows.rows[0];
+    if (!baseReview || baseReview.decision !== 'verified') {
+      throw new FinanceConflictException(
+        'The current final profit has no verified finance baseline',
+        'AFTER_SALES_FINANCE_BASELINE_REQUIRED',
+      );
+    }
+    const amountRmbRows = await client.query<{ amount: string }>(
+      `SELECT round($1::numeric * $2::numeric, 2)::text AS amount`,
+      [input.amount, input.fxRateToRmb],
+    );
+    const amountRmb = amountRmbRows.rows[0].amount;
+    const adjustmentRows = await client.query<{
+      id: string;
+      case_id: string;
+      sales_order_id: string;
+      adjustment_type: string;
+      amount: string;
+      currency: string;
+      fx_rate_to_rmb: string;
+      fx_source: string;
+      fx_captured_at: Date;
+      amount_rmb: string;
+      external_reference: string;
+      proof_file_id: string | null;
+      executed_by: string;
+      created_at: Date;
+    }>(
+      `INSERT INTO after_sales_adjustments
+         (tenant_id, case_id, sales_order_id, adjustment_type, amount, currency,
+          fx_rate_to_rmb, fx_source, fx_captured_at, amount_rmb,
+          external_reference, proof_file_id, executed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       RETURNING id, case_id, sales_order_id, adjustment_type,
+         amount::text AS amount, currency, fx_rate_to_rmb::text AS fx_rate_to_rmb,
+         fx_source, fx_captured_at, amount_rmb::text AS amount_rmb,
+         external_reference, proof_file_id, executed_by, created_at`,
+      [
+        actor.tenantId,
+        input.caseId,
+        input.salesOrderId,
+        input.caseType,
+        input.amount,
+        input.currency,
+        input.fxRateToRmb,
+        input.fxSource,
+        input.fxCapturedAt,
+        amountRmb,
+        input.externalReference,
+        input.proofFileId,
+        actor.userId,
+      ],
+    );
+    const adjustment = adjustmentRows.rows[0];
+    const factsAfter = await this.sourceFacts(client, order);
+
+    const reviewRows = await client.query<ReviewRow>(
+      `INSERT INTO finance_reviews
+         (tenant_id, sales_order_id, version, decision, reason, input_fingerprint,
+          missing_items, reviewed_by)
+       VALUES ($1,$2,$3,'verified',$4,$5,'[]'::jsonb,$6)
+       RETURNING ${REVIEW_COLUMNS}`,
+      [
+        actor.tenantId,
+        order.id,
+        baseReview.version + 1,
+        `After-sales ${input.caseNumber} executed`,
+        factsAfter.fingerprint,
+        actor.userId,
+      ],
+    );
+    const review = reviewRows.rows[0];
+    await client.query(
+      `INSERT INTO finance_review_items
+         (tenant_id, finance_review_id, subject_type, subject_id, decision, reason,
+          source_amount, source_currency, fx_rate_to_rmb, fx_source, fx_captured_at,
+          amount_rmb, source_snapshot, reviewed_by)
+       SELECT tenant_id, $1, subject_type, subject_id, 'verified', NULL,
+              source_amount, source_currency, fx_rate_to_rmb, fx_source, fx_captured_at,
+              amount_rmb, source_snapshot, $2
+         FROM finance_review_items
+        WHERE finance_review_id = $3 AND subject_id IS NOT NULL
+        ORDER BY created_at, id`,
+      [review.id, actor.userId, baseReview.id],
+    );
+    const adjustmentFact = factsAfter.adjustments.find((row) => row.id === adjustment.id);
+    if (!adjustmentFact) {
+      throw new FinanceConflictException(
+        'The after-sales adjustment could not be included in the finance source state',
+        'AFTER_SALES_ADJUSTMENT_SOURCE_MISSING',
+      );
+    }
+    await client.query(
+      `INSERT INTO finance_review_items
+         (tenant_id, finance_review_id, subject_type, subject_id, decision,
+          source_amount, source_currency, fx_rate_to_rmb, fx_source, fx_captured_at,
+          amount_rmb, source_snapshot, reviewed_by)
+       VALUES ($1,$2,'after_sales_adjustment',$3,'verified',$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        actor.tenantId,
+        review.id,
+        adjustment.id,
+        adjustment.amount,
+        adjustment.currency,
+        adjustment.fx_rate_to_rmb,
+        adjustment.fx_source,
+        adjustment.fx_captured_at,
+        adjustment.amount_rmb,
+        JSON.stringify(adjustmentFact.snapshot),
+        actor.userId,
+      ],
+    );
+    const reviewItems = (
+      await client.query<ReviewItemRow>(
+        `SELECT ${REVIEW_ITEM_COLUMNS} FROM finance_review_items
+          WHERE finance_review_id = $1 ORDER BY created_at, id`,
+        [review.id],
+      )
+    ).rows;
+
+    const nextRefund = addMoney([profit.refund_rmb, amountRmb]);
+    const nextNet = subtractMoney(profit.net_profit_rmb, amountRmb);
+    const inputSnapshot = {
+      formula_version: 'order_profit_rmb_v2',
+      source_facts: factsAfter.snapshot,
+      finance_review: { id: review.id, version: review.version, decision: review.decision },
+      review_items: reviewItems,
+      after_sales_adjustments: factsAfter.adjustments.map((row) => row.snapshot),
+    };
+    const profitRows = await client.query<ProfitRow>(
+      `INSERT INTO profit_snapshots
+         (tenant_id, sales_order_id, version, status, supersedes_id, finance_review_id,
+          formula_version, input_fingerprint, input_snapshot, missing_items,
+          revenue_rmb, purchase_cost_rmb, freight_rmb, other_expense_rmb, refund_rmb,
+          gross_profit_rmb, net_profit_rmb, created_by)
+       VALUES ($1,$2,$3,'final',$4,$5,'order_profit_rmb_v2',$6,$7,'[]'::jsonb,
+               $8,$9,$10,$11,$12,$13,$14,$15)
+       RETURNING ${PROFIT_COLUMNS}`,
+      [
+        actor.tenantId,
+        order.id,
+        profit.version + 1,
+        profit.id,
+        review.id,
+        factsAfter.fingerprint,
+        JSON.stringify(inputSnapshot),
+        profit.revenue_rmb,
+        profit.purchase_cost_rmb,
+        profit.freight_rmb,
+        profit.other_expense_rmb,
+        nextRefund,
+        profit.gross_profit_rmb,
+        nextNet,
+        actor.userId,
+      ],
+    );
+    const nextProfit = profitRows.rows[0];
+
+    const previousLines = (
+      await client.query<CandidateLineRow>(
+        `SELECT line.id, line.role_type, line.user_id, users.name AS user_name,
+                line.rule_version_id, line.basis_type,
+                line.raw_basis_rmb::text AS raw_basis_rmb,
+                line.eligible_basis_rmb::text AS eligible_basis_rmb,
+                line.share_bps, line.allocated_basis_rmb::text AS allocated_basis_rmb,
+                line.rate_bps, line.commission_amount_rmb::text AS commission_amount_rmb
+           FROM commission_candidate_lines_v2 line
+           JOIN users ON users.id = line.user_id AND users.tenant_id = line.tenant_id
+          WHERE line.candidate_id = $1 ORDER BY line.role_type, users.name, line.id`,
+        [candidate.id],
+      )
+    ).rows;
+    const basisValue = (basis: CandidateLineRow['basis_type']): string => {
+      if (basis === 'sales_revenue') return nextProfit.revenue_rmb;
+      if (basis === 'gross_profit') return nextProfit.gross_profit_rmb;
+      return nextProfit.net_profit_rmb;
+    };
+    const nextLines = previousLines.map((line) => {
+      const rawBasis = basisValue(line.basis_type);
+      const eligibleBasis = nonNegativeMoney(rawBasis);
+      const allocatedBasis = multiplyMoneyByBps(eligibleBasis, line.share_bps);
+      return {
+        ...line,
+        raw_basis_rmb: rawBasis,
+        eligible_basis_rmb: eligibleBasis,
+        allocated_basis_rmb: allocatedBasis,
+        commission_amount_rmb: multiplyMoneyByBps(allocatedBasis, line.rate_bps),
+      };
+    });
+    const nextTotal = addMoney(nextLines.map((line) => line.commission_amount_rmb));
+    const revisionReason = `After-sales ${input.caseNumber}: ${input.caseType}`;
+    const calculationSnapshot = {
+      formula_version: 'commission_candidate_rmb_v1',
+      profit_snapshot: {
+        id: nextProfit.id,
+        version: nextProfit.version,
+        formula_version: nextProfit.formula_version,
+        revenue_rmb: nextProfit.revenue_rmb,
+        gross_profit_rmb: nextProfit.gross_profit_rmb,
+        net_profit_rmb: nextProfit.net_profit_rmb,
+      },
+      supersedes_candidate_id: candidate.id,
+      after_sales_adjustment_id: adjustment.id,
+      rounding: 'integer_cents_half_up_per_participant',
+    };
+    const nextCandidateRows = await client.query<CandidateRow>(
+      `INSERT INTO commission_candidates_v2
+         (tenant_id, sales_order_id, profit_snapshot_id, version, supersedes_id,
+          formula_version, calculation_snapshot, total_commission_rmb,
+          revision_reason, created_by)
+       VALUES ($1,$2,$3,$4,$5,'commission_candidate_rmb_v1',$6,$7,$8,$9)
+       RETURNING id, sales_order_id, profit_snapshot_id, version, supersedes_id,
+         formula_version, calculation_snapshot,
+         total_commission_rmb::text AS total_commission_rmb,
+         revision_reason, created_by, created_at,
+         NULL::uuid AS lock_id, NULL::uuid AS locked_by,
+         NULL::timestamptz AS locked_at, NULL::text AS lock_comment`,
+      [
+        actor.tenantId,
+        order.id,
+        nextProfit.id,
+        candidate.version + 1,
+        candidate.id,
+        JSON.stringify(calculationSnapshot),
+        nextTotal,
+        revisionReason,
+        actor.userId,
+      ],
+    );
+    const nextCandidate = nextCandidateRows.rows[0];
+    for (const line of nextLines) {
+      await client.query(
+        `INSERT INTO commission_candidate_lines_v2
+           (tenant_id, candidate_id, role_type, user_id, rule_version_id, basis_type,
+            raw_basis_rmb, eligible_basis_rmb, share_bps, allocated_basis_rmb,
+            rate_bps, commission_amount_rmb)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [
+          actor.tenantId,
+          nextCandidate.id,
+          line.role_type,
+          line.user_id,
+          line.rule_version_id,
+          line.basis_type,
+          line.raw_basis_rmb,
+          line.eligible_basis_rmb,
+          line.share_bps,
+          line.allocated_basis_rmb,
+          line.rate_bps,
+          line.commission_amount_rmb,
+        ],
+      );
+    }
+    await client.query(
+      `UPDATE sales_orders SET status = 'finance_review', updated_at = now() WHERE id = $1`,
+      [order.id],
+    );
+
+    await this.audit.logInTransaction(client, {
+      tenantId: actor.tenantId,
+      actorType: 'tenant_user',
+      actorId: actor.userId,
+      action: 'after_sales_adjustment.executed',
+      resourceType: 'after_sales_adjustment',
+      resourceId: adjustment.id,
+      after: adjustment,
+      reason: revisionReason,
+    });
+    await this.audit.logInTransaction(client, {
+      tenantId: actor.tenantId,
+      actorType: 'tenant_user',
+      actorId: actor.userId,
+      action: 'profit_snapshot.after_sales_revised',
+      resourceType: 'profit_snapshot',
+      resourceId: nextProfit.id,
+      before: { id: profit.id, version: profit.version, net_profit_rmb: profit.net_profit_rmb },
+      after: nextProfit,
+      reason: revisionReason,
+    });
+    await this.audit.logInTransaction(client, {
+      tenantId: actor.tenantId,
+      actorType: 'tenant_user',
+      actorId: actor.userId,
+      action: 'commission_candidate.after_sales_revised',
+      resourceType: 'commission_candidate_v2',
+      resourceId: nextCandidate.id,
+      before: { id: candidate.id, version: candidate.version, lock_id: candidate.lock_id },
+      after: nextCandidate,
+      reason: revisionReason,
+    });
+    await this.recordEvent(
+      client,
+      actor,
+      order.id,
+      'after_sales_adjustment',
+      adjustment.id,
+      'after_sales_adjustment.executed',
+    );
+    await this.recordEvent(
+      client,
+      actor,
+      order.id,
+      'profit_snapshot',
+      nextProfit.id,
+      'profit_snapshot.after_sales_revised',
+    );
+    await this.recordEvent(
+      client,
+      actor,
+      order.id,
+      'commission_candidate_v2',
+      nextCandidate.id,
+      'commission_candidate.after_sales_revised',
+    );
+    return {
+      adjustment,
+      finance_review: await this.reviewResponse(client, review),
+      profit_snapshot: nextProfit,
+      commission_candidate: await this.candidateResponse(client, nextCandidate, nextProfit.id),
+    };
   }
 
   async calculateCandidate(
@@ -1184,7 +1645,7 @@ export class FinanceService {
           ],
         );
       }
-      const response = await this.candidateResponse(client, candidate);
+      const response = await this.candidateResponse(client, candidate, profit.id);
       await this.audit.logInTransaction(client, {
         tenantId: actor.tenantId,
         actorType: 'tenant_user',
@@ -1260,7 +1721,7 @@ export class FinanceService {
           WHERE id = $1 AND status = 'finance_review'`,
         [candidate.sales_order_id],
       );
-      const response = await this.fetchCandidate(client, candidate.id);
+      const response = await this.fetchCandidate(client, candidate.id, profit.id);
       await this.audit.logInTransaction(client, {
         tenantId: actor.tenantId,
         actorType: 'tenant_user',
@@ -1283,7 +1744,11 @@ export class FinanceService {
     });
   }
 
-  private async candidateHistory(client: PoolClient, orderId: string) {
+  private async candidateHistory(
+    client: PoolClient,
+    orderId: string,
+    currentProfitSnapshotId: string | null,
+  ) {
     const rows = await client.query<CandidateRow>(
       `SELECT ${CANDIDATE_COLUMNS}
          FROM commission_candidates_v2 candidate
@@ -1291,10 +1756,16 @@ export class FinanceService {
         WHERE candidate.sales_order_id = $1 ORDER BY candidate.version DESC`,
       [orderId],
     );
-    return Promise.all(rows.rows.map((row) => this.candidateResponse(client, row)));
+    return Promise.all(
+      rows.rows.map((row) => this.candidateResponse(client, row, currentProfitSnapshotId)),
+    );
   }
 
-  private async fetchCandidate(client: PoolClient, id: string) {
+  private async fetchCandidate(
+    client: PoolClient,
+    id: string,
+    currentProfitSnapshotId: string | null,
+  ) {
     const row = await client.query<CandidateRow>(
       `SELECT ${CANDIDATE_COLUMNS}
          FROM commission_candidates_v2 candidate
@@ -1303,10 +1774,14 @@ export class FinanceService {
       [id],
     );
     if (!row.rows[0]) throw new FinanceNotFoundException('Commission candidate not found');
-    return this.candidateResponse(client, row.rows[0]);
+    return this.candidateResponse(client, row.rows[0], currentProfitSnapshotId);
   }
 
-  private async candidateResponse(client: PoolClient, row: CandidateRow) {
+  private async candidateResponse(
+    client: PoolClient,
+    row: CandidateRow,
+    currentProfitSnapshotId: string | null,
+  ) {
     const lines = await client.query<CandidateLineRow>(
       `SELECT line.id, line.role_type, line.user_id, users.name AS user_name,
               line.rule_version_id, line.basis_type,
@@ -1322,6 +1797,8 @@ export class FinanceService {
     return {
       ...row,
       status: row.lock_id ? 'locked' : 'calculated',
+      is_current:
+        currentProfitSnapshotId !== null && row.profit_snapshot_id === currentProfitSnapshotId,
       lock: row.lock_id
         ? {
             id: row.lock_id,
