@@ -110,14 +110,64 @@ export class BusinessEventsService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const params: unknown[] = [allPermissions, narrowedPermissions, actor.userId];
+        let relatedChainCtes = '';
         let chainFilter = '';
         if (query.chainType && query.chainId) {
           params.push(query.chainType, query.chainId);
-          chainFilter = `AND chain_type = $4 AND chain_id = $5`;
+          relatedChainCtes = `
+            chain_edges(from_type, from_id, to_type, to_id) AS (
+              SELECT 'inquiry'::text, orders.inquiry_id, 'sales_order'::text, orders.id
+                FROM sales_orders orders
+               WHERE orders.inquiry_id IS NOT NULL
+                 AND orders.tenant_id = current_setting('app.current_tenant_id')::uuid
+              UNION ALL
+              SELECT 'sales_order', orders.id, 'inquiry', orders.inquiry_id
+                FROM sales_orders orders
+               WHERE orders.inquiry_id IS NOT NULL
+                 AND orders.tenant_id = current_setting('app.current_tenant_id')::uuid
+              UNION ALL
+              SELECT 'sales_order', links.sales_order_id, 'purchase_order', links.purchase_order_id
+                FROM sales_order_purchase_orders links
+               WHERE links.tenant_id = current_setting('app.current_tenant_id')::uuid
+              UNION ALL
+              SELECT 'purchase_order', links.purchase_order_id, 'sales_order', links.sales_order_id
+                FROM sales_order_purchase_orders links
+               WHERE links.tenant_id = current_setting('app.current_tenant_id')::uuid
+              UNION ALL
+              SELECT 'inquiry', samples.inquiry_id, 'sales_order', conversions.sales_order_id
+                FROM sample_order_conversions conversions
+                JOIN sample_orders samples
+                  ON samples.id = conversions.sample_order_id
+                 AND samples.tenant_id = conversions.tenant_id
+               WHERE conversions.tenant_id = current_setting('app.current_tenant_id')::uuid
+              UNION ALL
+              SELECT 'sales_order', conversions.sales_order_id, 'inquiry', samples.inquiry_id
+                FROM sample_order_conversions conversions
+                JOIN sample_orders samples
+                  ON samples.id = conversions.sample_order_id
+                 AND samples.tenant_id = conversions.tenant_id
+               WHERE conversions.tenant_id = current_setting('app.current_tenant_id')::uuid
+            ),
+            related_chains(chain_type, chain_id) AS (
+              SELECT $4::text, $5::uuid
+              UNION
+              SELECT edges.to_type, edges.to_id
+                FROM related_chains related
+                JOIN chain_edges edges
+                  ON edges.from_type = related.chain_type
+                 AND edges.from_id = related.chain_id
+            ),
+          `;
+          chainFilter = `AND EXISTS (
+            SELECT 1
+              FROM related_chains related
+             WHERE related.chain_type = projected.chain_type
+               AND related.chain_id = projected.chain_id
+          )`;
         }
 
         const projection = `
-          WITH projected AS (
+          WITH RECURSIVE ${relatedChainCtes} projected AS (
             SELECT 'event:' || be.id::text AS id,
                    be.chain_type, be.chain_id,
                    be.credential_type, be.credential_id,

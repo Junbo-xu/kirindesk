@@ -27,6 +27,11 @@ const PROCUREMENT_USER_ID = '90000000-0000-4000-8000-000000000002';
 const FINANCE_USER_ID = '90000000-0000-4000-8000-000000000003';
 const APPROVER_USER_ID = '90000000-0000-4000-8000-000000000004';
 const NO_PERMISSION_USER_ID = '90000000-0000-4000-8000-000000000005';
+const CHAIN_CUSTOMER_ID = '92000000-0000-4000-8000-000000000001';
+const CHAIN_INQUIRY_ID = '92000000-0000-4000-8000-000000000002';
+const CHAIN_PI_ID = '92000000-0000-4000-8000-000000000003';
+const CHAIN_PI_SERIES_ID = '92000000-0000-4000-8000-000000000004';
+const CHAIN_SALES_ORDER_ID = '92000000-0000-4000-8000-000000000005';
 
 const USERS = [
   { id: BUSINESS_USER_ID, email: 'workbench-business@test.local', name: 'Workbench Business' },
@@ -158,6 +163,61 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
           );
         }
       }
+
+      await client.query(
+        `INSERT INTO customers
+           (id, tenant_id, owner_user_id, company_name, source, status)
+         VALUES ($1, $2, $3, 'Credential Chain Fixture', 'integration_test', 'active')`,
+        [CHAIN_CUSTOMER_ID, TEST_TENANT_ID, BUSINESS_USER_ID],
+      );
+      await client.query(
+        `INSERT INTO inquiries
+           (id, tenant_id, owner_user_id, customer_code, customer_country,
+            customer_message, status, customer_id)
+         VALUES ($1, $2, $3, 'CHAIN-CUSTOMER', 'CN', 'Sensitive chain fixture', 'draft', $4)`,
+        [CHAIN_INQUIRY_ID, TEST_TENANT_ID, BUSINESS_USER_ID, CHAIN_CUSTOMER_ID],
+      );
+      await client.query(
+        `INSERT INTO proforma_invoices
+           (id, tenant_id, series_id, inquiry_id, customer_id, pi_number, version,
+            currency, payment_terms, total_amount, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'PI-CHAIN-FIXTURE', 1,
+                 'USD', 'Integration test terms', 100, $6)`,
+        [
+          CHAIN_PI_ID,
+          TEST_TENANT_ID,
+          CHAIN_PI_SERIES_ID,
+          CHAIN_INQUIRY_ID,
+          CHAIN_CUSTOMER_ID,
+          BUSINESS_USER_ID,
+        ],
+      );
+      await client.query(
+        `INSERT INTO sales_orders
+           (id, tenant_id, customer_id, owner_user_id, order_number, pi_number,
+            currency, total_amount, status, inquiry_id, source_pi_id)
+         VALUES ($1, $2, $3, $4, 'SO-CHAIN-FIXTURE', 'PI-CHAIN-FIXTURE',
+                 'USD', 100, 'customer_confirmed', $5, $6)`,
+        [
+          CHAIN_SALES_ORDER_ID,
+          TEST_TENANT_ID,
+          CHAIN_CUSTOMER_ID,
+          BUSINESS_USER_ID,
+          CHAIN_INQUIRY_ID,
+          CHAIN_PI_ID,
+        ],
+      );
+      await client.query(
+        `INSERT INTO business_events
+           (tenant_id, chain_type, chain_id, credential_type, credential_id, event_type,
+            actor_type, actor_id, scope_user_id, visibility_permission)
+         VALUES
+           ($1, 'inquiry', $2, 'proforma_invoice', $3, 'fixture.pi_created',
+            'tenant_user', $4, $4, 'inquiries:view'),
+           ($1, 'sales_order', $5, 'shipment', $5, 'fixture.shipment_delivered',
+            'tenant_user', $4, $4, 'orders:view')`,
+        [TEST_TENANT_ID, CHAIN_INQUIRY_ID, CHAIN_PI_ID, BUSINESS_USER_ID, CHAIN_SALES_ORDER_ID],
+      );
     });
 
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -391,6 +451,31 @@ describe('Stage 2G role workbench and credential chain (integration)', () => {
       .set(bearer(tokens.get('tenant2')!));
     expect(tenant2.status).toBe(200);
     expect(JSON.stringify(tenant2.body)).not.toContain(exceptionIds[0]);
+  });
+
+  it('resolves inquiry and sales-order roots into the same permission-scoped chain', async () => {
+    for (const [chainType, chainId] of [
+      ['inquiry', CHAIN_INQUIRY_ID],
+      ['sales_order', CHAIN_SALES_ORDER_ID],
+    ]) {
+      const response = await request(app.getHttpServer())
+        .get(`/api/business-events?chainType=${chainType}&chainId=${chainId}&pageSize=100`)
+        .set(bearer(tokens.get('Workbench Business')!));
+      expect(response.status).toBe(200);
+      expect(response.body.data.map((event: { eventType: string }) => event.eventType)).toEqual(
+        expect.arrayContaining(['fixture.pi_created', 'fixture.shipment_delivered']),
+      );
+      expect(JSON.stringify(response.body)).not.toContain('Sensitive chain fixture');
+    }
+
+    const procurement = await request(app.getHttpServer())
+      .get(
+        `/api/business-events?chainType=sales_order&chainId=${CHAIN_SALES_ORDER_ID}&pageSize=100`,
+      )
+      .set(bearer(tokens.get('Workbench Procurement')!));
+    expect(procurement.status).toBe(200);
+    expect(JSON.stringify(procurement.body)).not.toContain('fixture.pi_created');
+    expect(JSON.stringify(procurement.body)).not.toContain('fixture.shipment_delivered');
   });
 
   it('keeps business events append-only and the tenant audit chain valid', async () => {
