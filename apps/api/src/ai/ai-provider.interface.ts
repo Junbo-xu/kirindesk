@@ -25,6 +25,8 @@ export interface AiCompleteInput {
   /** Prompt / instruction text. Callers must not place raw customer files
    *  here; pass already-extracted, minimized text. */
   input: string;
+  /** DeepSeek is currently approved only for explicitly synthetic test data. */
+  dataClassification?: 'business' | 'synthetic_test';
   options?: AiOptions;
 }
 
@@ -35,6 +37,8 @@ export interface AiCompleteResult {
   output: string;
   /** Optional usage for audit (tokens_used / cost_estimate); null in mock. */
   tokensUsed: number | null;
+  /** Conservative CNY estimate persisted with the invocation, never billed here. */
+  costEstimateCny?: number | null;
   /** Provider-side processing time in ms (for audit duration_ms). */
   durationMs: number;
 }

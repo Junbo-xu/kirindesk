@@ -9,9 +9,11 @@ import {
   ExportFile,
   ExportFormat,
   exportTimestamp,
+  exportWatermarkRows,
   num,
   txt,
   serializeCsv,
+  BLANK_ROW,
 } from '../common/export-csv';
 
 /**
@@ -34,12 +36,17 @@ export class AuditExportService {
   ): Promise<ExportFile> {
     const { data, truncated } = await this.query.listForExport(actor, query, cap);
 
-    const body = serializeCsv(this.buildRows(data, truncated, cap));
+    const exportedAt = new Date();
+    const body = serializeCsv([
+      ...exportWatermarkRows(actor, exportedAt),
+      BLANK_ROW,
+      ...this.buildRows(data, truncated, cap),
+    ]);
     const format: ExportFormat = query.format ?? 'csv';
 
     const from = query.from ? query.from.slice(0, 10) : 'all';
     const to = query.to ? query.to.slice(0, 10) : 'all';
-    const filename = `audit-logs_${from}_${to}_${exportTimestamp()}.${format}`;
+    const filename = `audit-logs_${from}_${to}_${exportTimestamp(exportedAt)}.${format}`;
 
     // Fail-closed (plan §5.2): audit BEFORE returning the bytes. Filter summary
     // + row count + truncation flag only — never the exported row content.

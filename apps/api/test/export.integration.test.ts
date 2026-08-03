@@ -62,6 +62,15 @@ function parseCsv(body: string): string[][] {
   return rows;
 }
 
+function auditDataRows(body: string): string[][] {
+  const rows = parseCsv(body);
+  const headerIndex = rows.findIndex(
+    (row) => row[0] === '时间' && row[1] === '操作者' && row[6] === '事件ID',
+  );
+  if (headerIndex < 0) throw new Error('Audit export header not found');
+  return rows.slice(headerIndex + 1).filter((row) => row.length === 7);
+}
+
 describe('Data Export API (integration)', () => {
   let app: INestApplication;
   let pool: Pool;
@@ -149,7 +158,10 @@ describe('Data Export API (integration)', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.text.charCodeAt(0)).toBe(0xfeff); // BOM
     const rows = parseCsv(res.text);
-    expect(rows[0]).toEqual(['报表', '销售汇总']);
+    expect(rows[0]).toEqual(['水印', 'KirinDesk 授权导出，禁止未授权转发']);
+    expect(rows[1]).toEqual(['租户', TEST_TENANT_ID]);
+    expect(rows[2]).toEqual(['导出人', TEST_USER_ID]);
+    expect(rows.some((r) => r[0] === '报表' && r[1] === '销售汇总')).toBe(true);
     expect(rows.some((r) => r[0] === '合计')).toBe(true);
   });
 
@@ -209,15 +221,14 @@ describe('Data Export API (integration)', () => {
     expect(res.status).toBe(200);
     expect(res.text.charCodeAt(0)).toBe(0xfeff);
     const rows = parseCsv(res.text);
-    expect(rows[0]).toEqual([
-      '时间',
-      '操作者',
-      '操作者类型',
-      '动作',
-      '资源类型',
-      '资源ID',
-      '事件ID',
-    ]);
+    expect(rows[0]).toEqual(['水印', 'KirinDesk 授权导出，禁止未授权转发']);
+    expect(
+      rows.some(
+        (row) =>
+          JSON.stringify(row) ===
+          JSON.stringify(['时间', '操作者', '操作者类型', '动作', '资源类型', '资源ID', '事件ID']),
+      ),
+    ).toBe(true);
     for (const col of FORBIDDEN_COLS) expect(res.text).not.toContain(col);
   });
 
@@ -231,7 +242,7 @@ describe('Data Export API (integration)', () => {
     const csv = await request(app.getHttpServer())
       .get(`/api/audit-logs/export?${filter}`)
       .set(bearer(adminToken));
-    const dataRows = parseCsv(csv.text).slice(1); // drop header
+    const dataRows = auditDataRows(csv.text);
     expect(dataRows.length).toBe(list.body.total);
     for (const r of dataRows) expect(r[3]).toBe('customer.created');
   });
@@ -241,7 +252,7 @@ describe('Data Export API (integration)', () => {
       .get(`/api/audit-logs/export?${AUDIT_Q}`)
       .set(bearer(salesToken));
     expect(res.status).toBe(200);
-    const dataRows = parseCsv(res.text).slice(1);
+    const dataRows = auditDataRows(res.text);
     expect(dataRows.length).toBeGreaterThan(0);
     // own anchors to actor_id → every row is the sales user; never the admin.
     for (const r of dataRows) expect(r[1]).toBe('Test Sales');

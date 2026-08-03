@@ -43,3 +43,13 @@ export class OrderRequiresLineItemException extends BadRequestException {
     super('A non-draft order must have at least one line item');
   }
 }
+
+export class GeneratedPurchaseOrderImmutableException extends ConflictException {
+  constructor() {
+    super({
+      statusCode: 409,
+      code: 'GENERATED_PURCHASE_ORDER_IMMUTABLE',
+      message: 'Use the procurement request workflow to change a generated purchase order',
+    });
+  }
+}

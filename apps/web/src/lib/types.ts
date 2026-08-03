@@ -2,6 +2,383 @@ export interface MeResponse {
   id: string;
   email: string;
   tenantId: string;
+  permissions: Record<string, 'all' | 'assigned' | 'own'>;
+  workflowMode: 'active' | 'read_only' | 'hidden';
+}
+
+export interface WorkbenchTask {
+  key: string;
+  label: string;
+  count: number;
+  href: string;
+  urgency: 'normal' | 'high' | 'critical';
+}
+
+export interface WorkbenchSummary {
+  key: string;
+  label: string;
+  value: string | number;
+  amount?: string;
+  currency?: string;
+  href: string;
+}
+
+export interface WorkbenchResponse {
+  generatedAt: string;
+  capabilities: Array<'business' | 'procurement' | 'finance' | 'approver' | 'admin'>;
+  tasks: WorkbenchTask[];
+  summaries: WorkbenchSummary[];
+}
+
+export type BusinessExceptionType =
+  | 'price_variance'
+  | 'quantity_variance'
+  | 'quality_variance'
+  | 'missing_expense'
+  | 'duplicate_customer';
+export type BusinessExceptionStatus = 'open' | 'assigned' | 'in_progress' | 'resolved' | 'closed';
+
+export interface BusinessException {
+  id: string;
+  contextType: string;
+  contextId: string;
+  type: BusinessExceptionType;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  status: BusinessExceptionStatus;
+  summary: string;
+  ownerUserId: string | null;
+  assignedToUserId: string | null;
+  assigneeName: string | null;
+  resolution: string | null;
+  version: number;
+  detectedAt: string;
+  assignedAt: string | null;
+  startedAt: string | null;
+  resolvedAt: string | null;
+  closedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BusinessEvent {
+  id: string;
+  chainType: string;
+  chainId: string;
+  credentialType: string;
+  credentialId: string;
+  eventType: string;
+  actorType: string;
+  actorId: string | null;
+  actorName: string | null;
+  occurredAt: string;
+}
+
+export interface ExceptionAssignee {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface InquiryItemSummary {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string;
+}
+
+export interface InquirySummary {
+  id: string;
+  customer_id: string | null;
+  customer_code: string;
+  customer_country: string;
+  status: string;
+  created_at: string;
+  items: InquiryItemSummary[];
+}
+
+export interface SalesQuotationLine {
+  id: string;
+  inquiry_item_id: string;
+  variant_key: string;
+  variant_value: string;
+  quantity: string;
+  unit_price: string;
+  minimum_quantity: string | null;
+  lead_time_days: number | null;
+}
+
+export interface SalesQuotation {
+  id: string;
+  inquiry_id: string;
+  version: number;
+  currency: Currency;
+  valid_until: string;
+  updated_at: string;
+  lines: SalesQuotationLine[];
+}
+
+export interface CommercialSelection {
+  id: string;
+  inquiry_id: string;
+  inquiry_item_id: string;
+  quotation_version: number;
+  commercial: {
+    sales_currency: Currency;
+    sales_unit_price: string;
+    purchase_to_sales_fx_rate: string;
+    fx_rate_source: string;
+    fx_captured_at: string;
+    purchase_unit_cost: string;
+    gross_profit_unit: string;
+    gross_margin_bps: number;
+    margin_threshold_bps: number;
+    margin_status: 'meets_threshold' | 'below_threshold';
+    margin_formula_version: string;
+    margin_approved: boolean;
+    margin_approved_at: string | null;
+  } | null;
+  snapshot: {
+    currency: Currency;
+    valid_until: string;
+    line: SalesQuotationLine;
+    inquiry_item: InquiryItemSummary & { inquiry_id: string; specifications: string | null };
+  };
+  created_at: string;
+}
+
+export interface ProformaInvoiceItem {
+  id: string;
+  selection_id: string;
+  line_no: number;
+  description: string;
+  specifications: string | null;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+  line_total: string;
+  selection_snapshot: Record<string, unknown>;
+}
+
+export interface ProformaInvoice {
+  id: string;
+  series_id: string;
+  inquiry_id: string;
+  customer_id: string;
+  sales_order_id: string | null;
+  pi_number: string;
+  version: number;
+  currency: Currency;
+  payment_terms: string;
+  status: 'draft' | 'issued' | 'customer_confirmed';
+  total_amount: string;
+  issued_at: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  is_current?: boolean;
+  items: ProformaInvoiceItem[];
+}
+
+export interface CustomerReceipt {
+  id: string;
+  proforma_invoice_id: string;
+  sales_order_id: string;
+  amount: string;
+  currency: Currency;
+  received_at: string;
+  method: 'bank_transfer' | 'cash' | 'card_external' | 'other_external';
+  external_reference: string;
+  proof_file_id: string | null;
+  status: 'recorded' | 'confirmed' | 'rejected';
+  decision_reason: string | null;
+  payment_provider_status: 'not_verified';
+  created_at: string;
+}
+
+export interface ProcurementGate {
+  id: string;
+  sales_order_id: string;
+  proforma_invoice_id: string;
+  status: 'blocked' | 'open' | 'bypassed';
+  order_amount: string;
+  confirmed_amount: string;
+  required_amount: string;
+  currency: Currency;
+  required_ratio_bps: number;
+  proof_required: boolean;
+  config_enabled: boolean;
+  bypass_reason: string | null;
+  blocking_reasons: string[];
+  evaluated_at: string;
+}
+
+export interface CommercialSettings {
+  minimum_margin_bps: number;
+  procurement_gate_enabled: boolean;
+  required_receipt_ratio_bps: number;
+  receipt_proof_required: boolean;
+  bypass_reason: string | null;
+}
+
+export interface FulfillmentSettings {
+  require_sales_receipt_confirmation: boolean;
+}
+
+export interface FulfillmentOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string | null;
+  accepted_quantity: string;
+  shipped_quantity: string;
+  delivered_quantity: string;
+  available_quantity: string;
+}
+
+export interface FulfillmentPurchaseOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  quantity: string;
+  unit: string | null;
+}
+
+export interface FulfillmentPurchaseOrder {
+  id: string;
+  order_number: string;
+  currency: Currency;
+  status: string;
+  items: FulfillmentPurchaseOrderItem[];
+}
+
+export interface GoodsReceiptItem {
+  id: string;
+  purchase_order_item_id: string;
+  sales_order_item_id: string;
+  received_quantity: string;
+  accepted_quantity: string;
+  rejected_quantity: string;
+  quantity_variance: string;
+}
+
+export interface GoodsReceipt {
+  id: string;
+  sales_order_id: string;
+  purchase_order_id: string;
+  batch_number: string;
+  status: 'pending' | 'inspected' | 'accepted' | 'rejected';
+  qc_result: 'passed' | 'partial' | 'failed' | null;
+  is_final_batch: boolean;
+  sales_confirmation_required: boolean;
+  note: string | null;
+  created_at: string;
+  items: GoodsReceiptItem[];
+  files: Array<{ file_id: string; file_role: string }>;
+  confirmations: Array<{
+    id: string;
+    confirmation_type: 'procurement_qc' | 'sales_acceptance';
+    decision: 'accepted' | 'rejected';
+    reason: string | null;
+    confirmed_at: string;
+  }>;
+}
+
+export interface Shipment {
+  id: string;
+  sales_order_id: string;
+  batch_number: string;
+  status: 'draft' | 'dispatched' | 'delivered';
+  carrier: string;
+  tracking_number: string;
+  dispatched_at: string | null;
+  delivered_at: string | null;
+  delivery_proof_file_id: string | null;
+  delivery_note: string | null;
+  items: Array<{
+    id: string;
+    sales_order_item_id: string;
+    quantity: string;
+    available_quantity_snapshot: string;
+  }>;
+  logistics_events: Array<{
+    id: string;
+    event_type: string;
+    location: string | null;
+    description: string | null;
+    occurred_at: string;
+  }>;
+  receipts: Array<{
+    id: string;
+    customer_receipt_id: string;
+    amount: string;
+    currency: Currency;
+    received_at: string;
+    status: 'recorded' | 'confirmed';
+  }>;
+}
+
+export interface OrderExpense {
+  id: string;
+  sales_order_id: string;
+  shipment_id: string | null;
+  expense_type: 'freight' | 'insurance' | 'customs' | 'other';
+  amount: string;
+  currency: Currency;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+  status: 'pending_fx' | 'complete';
+  note: string | null;
+  created_at: string;
+}
+
+export interface FulfillmentOrder {
+  id: string;
+  order_number: string;
+  currency: Currency;
+  aggregate_status: string;
+  settings: FulfillmentSettings;
+  items: FulfillmentOrderItem[];
+  purchase_orders: FulfillmentPurchaseOrder[];
+  goods_receipts: GoodsReceipt[];
+  shipments: Shipment[];
+  expenses: OrderExpense[];
+}
+
+export interface CreateGoodsReceiptInput {
+  batch_number: string;
+  is_final_batch: boolean;
+  items: Array<{ purchase_order_item_id: string; received_quantity: string }>;
+  file_ids?: string[];
+  note?: string;
+}
+
+export interface CreateShipmentInput {
+  batch_number: string;
+  carrier: string;
+  tracking_number: string;
+  items: Array<{ sales_order_item_id: string; quantity: string }>;
+}
+
+export interface CompleteExpenseFxInput {
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+}
+
+export interface QuoteTaskSummary {
+  id: string;
+  inquiry_id: string;
+  customer_country: string;
+  sanitization_status: string;
+  sanitized_summary: string | null;
+  items: Array<{ inquiry_item_id: string; description: string; quantity: string; unit: string }>;
+  last_error_code: string | null;
+  attempt_count: number;
+  updated_at: string;
 }
 
 export interface LoginResponse {
@@ -931,16 +1308,398 @@ export interface SignupResult {
   };
 }
 
+export type FinanceSourceType =
+  | 'customer_receipt'
+  | 'purchase_cost'
+  | 'order_expense'
+  | 'after_sales_adjustment';
+export type CommissionRoleType = 'sales' | 'procurement';
+export type CommissionBasisType = 'sales_revenue' | 'gross_profit' | 'net_profit';
+
+export interface FinanceOrderSummary {
+  id: string;
+  order_number: string;
+  status: string;
+  currency: Currency;
+  total_amount: string;
+  finance_decision: 'verified' | 'returned' | null;
+  profit_status: 'provisional' | 'final' | null;
+  commission_status: 'calculated' | 'locked' | null;
+}
+
+export interface FinanceOrderDetailOrder {
+  id: string;
+  owner_user_id: string;
+  order_number: string;
+  status: string;
+  currency: Currency;
+  total_amount: string;
+}
+
+export interface FinanceSource {
+  subject_type: FinanceSourceType;
+  id: string;
+  amount: string;
+  currency: Currency;
+  expense_type: 'freight' | 'insurance' | 'customs' | 'other' | null;
+  status: string;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+  needs_fx: boolean;
+}
+
+export interface FinanceReviewItem {
+  id: string;
+  subject_type:
+    | FinanceSourceType
+    | 'missing_receipt'
+    | 'missing_cost'
+    | 'missing_freight'
+    | 'missing_fx';
+  subject_id: string | null;
+  decision: 'verified' | 'returned';
+  source_amount: string | null;
+  source_currency: Currency | null;
+  fx_rate_to_rmb: string | null;
+  fx_source: string | null;
+  fx_captured_at: string | null;
+  amount_rmb: string | null;
+}
+
+export interface FinanceReview {
+  id: string;
+  version: number;
+  decision: 'verified' | 'returned';
+  reason: string | null;
+  input_fingerprint: string;
+  missing_items: string[];
+  reviewed_by: string;
+  reviewed_at: string;
+  items: FinanceReviewItem[];
+}
+
+export interface ProfitSnapshot {
+  id: string;
+  version: number;
+  status: 'provisional' | 'final';
+  supersedes_id: string | null;
+  finance_review_id: string | null;
+  formula_version: string;
+  input_fingerprint: string;
+  input_snapshot: Record<string, unknown>;
+  missing_items: string[];
+  revenue_rmb: string;
+  purchase_cost_rmb: string;
+  freight_rmb: string;
+  other_expense_rmb: string;
+  refund_rmb: string;
+  gross_profit_rmb: string;
+  net_profit_rmb: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CommissionRuleV2 {
+  id: string;
+  role_type: CommissionRoleType;
+  version: number;
+  supersedes_id: string | null;
+  basis_type: CommissionBasisType;
+  rate_bps: number;
+  created_by: string;
+  created_at: string;
+}
+
+export interface CommissionCandidateLineV2 {
+  id: string;
+  role_type: CommissionRoleType;
+  user_id: string;
+  user_name: string;
+  rule_version_id: string;
+  basis_type: CommissionBasisType;
+  raw_basis_rmb: string;
+  eligible_basis_rmb: string;
+  share_bps: number;
+  allocated_basis_rmb: string;
+  rate_bps: number;
+  commission_amount_rmb: string;
+}
+
+export interface CommissionCandidateV2 {
+  id: string;
+  sales_order_id: string;
+  profit_snapshot_id: string;
+  version: number;
+  supersedes_id: string | null;
+  formula_version: string;
+  calculation_snapshot: Record<string, unknown>;
+  total_commission_rmb: string;
+  revision_reason: string | null;
+  created_by: string;
+  created_at: string;
+  status: 'calculated' | 'locked';
+  is_current: boolean;
+  lock: {
+    id: string;
+    locked_by: string;
+    locked_at: string;
+    comment: string | null;
+  } | null;
+  lines: CommissionCandidateLineV2[];
+}
+
+export interface FinanceOrderDetail {
+  order: FinanceOrderDetailOrder;
+  source_state: {
+    fingerprint: string;
+    missing_items: string[];
+    receipts: FinanceSource[];
+    purchase_costs: FinanceSource[];
+    expenses: FinanceSource[];
+    after_sales_adjustments: FinanceSource[];
+  };
+  finance_reviews: FinanceReview[];
+  profit_snapshots: ProfitSnapshot[];
+  commission_rules: CommissionRuleV2[];
+  commission_candidates: CommissionCandidateV2[];
+  participants: Array<{ id: string; name: string; email: string }>;
+}
+
+export interface FinanceConversionInput {
+  subject_type: 'customer_receipt' | 'purchase_cost';
+  subject_id: string;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+}
+
+export interface CommissionAllocationInput {
+  role_type: CommissionRoleType;
+  participants: Array<{ user_id: string; share_bps: number }>;
+}
+
+export interface CalculateCommissionCandidateInput {
+  allocations: CommissionAllocationInput[];
+  revision_reason?: string;
+}
+
+export type SampleOrderStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'dispatched'
+  | 'delivered'
+  | 'confirmed'
+  | 'converted'
+  | 'closed';
+
+export interface SampleOrderItem {
+  id: string;
+  line_no: number;
+  description: string;
+  specifications: string | null;
+  sample_quantity: string;
+  maximum_conversion_quantity: string;
+  unit: string;
+  sales_currency: Currency;
+  sales_unit_price: string;
+  margin_status: string;
+  supplier_id?: string;
+  purchase_unit_cost?: string;
+  purchase_to_sales_fx_rate?: string;
+  fx_rate_source?: string;
+  fx_captured_at?: string;
+  source_selection_id?: string;
+  source_snapshot?: Record<string, unknown>;
+}
+
+export interface SampleOrder {
+  id: string;
+  inquiry_id: string;
+  customer_id: string;
+  owner_user_id: string;
+  sample_number: string;
+  status: SampleOrderStatus;
+  recipient: { name: string; phone: string; address: string; country: string };
+  shipping_fee: string;
+  shipping_currency: Currency;
+  note: string | null;
+  items: SampleOrderItem[];
+  approval: {
+    id: string;
+    decision: 'approved' | 'rejected';
+    reason: string | null;
+    decided_by: string;
+    created_at: string;
+  } | null;
+  shipment: {
+    id: string;
+    carrier: string;
+    tracking_number: string;
+    dispatched_by: string;
+    dispatched_at: string;
+    created_at: string;
+  } | null;
+  delivery: {
+    id: string;
+    shipment_id: string;
+    received_by: string;
+    delivered_at: string;
+    confirmed_by: string;
+    created_at: string;
+  } | null;
+  feedback: {
+    id: string;
+    feedback: string;
+    confirmed_by: string;
+    confirmed_at: string;
+    created_at: string;
+  } | null;
+  conversion: {
+    id: string;
+    inquiry_id: string;
+    proforma_invoice_id: string;
+    sales_order_id: string;
+    snapshot: Record<string, unknown>;
+    converted_by: string;
+    created_at: string;
+  } | null;
+  closure: {
+    id: string;
+    reason: string;
+    closed_by: string;
+    created_at: string;
+  } | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSampleOrderInput {
+  inquiry_id: string;
+  recipient_name: string;
+  recipient_phone: string;
+  recipient_address: string;
+  recipient_country: string;
+  shipping_fee: string;
+  shipping_currency: Currency;
+  note?: string;
+  items: Array<{ selection_id: string; quantity: string }>;
+}
+
+export type AfterSalesCaseStatus =
+  | 'draft'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'executing'
+  | 'completed'
+  | 'closed';
+
+export interface AfterSalesApprovalStep {
+  id: string;
+  step_no: number;
+  approver_user_id: string;
+  decision: 'approved' | 'rejected' | null;
+  decided_by: string | null;
+  reason: string | null;
+  decided_at: string | null;
+  status: 'current' | 'waiting' | 'approved' | 'rejected';
+}
+
+export interface AfterSalesAdjustment {
+  id: string;
+  adjustment_type: 'refund' | 'compensation';
+  amount: string;
+  currency: Currency;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+  amount_rmb: string;
+  external_reference: string;
+  proof_file_id: string | null;
+  executed_by: string;
+  created_at: string;
+}
+
+export interface AfterSalesCase {
+  id: string;
+  sales_order_id: string;
+  order_number: string;
+  shipment_id: string | null;
+  case_number: string;
+  case_type: 'refund' | 'compensation';
+  responsibility: 'supplier' | 'logistics' | 'company' | 'customer' | 'undetermined';
+  reason: string;
+  requested_amount: string;
+  currency: Currency;
+  proof_file_id: string | null;
+  status: AfterSalesCaseStatus;
+  requested_by: string;
+  approval_config: { id: string; version: number };
+  current_approval_step: number | null;
+  approval_steps: AfterSalesApprovalStep[];
+  adjustment: AfterSalesAdjustment | null;
+  completed_at: string | null;
+  closed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AfterSalesApprovalConfig {
+  id: string;
+  version: number;
+  created_at?: string;
+  steps: Array<{
+    id: string;
+    step_no: number;
+    approver_user_id: string;
+    approver_name: string;
+  }>;
+}
+
+export interface CreateAfterSalesCaseInput {
+  shipment_id?: string;
+  case_type: 'refund' | 'compensation';
+  responsibility: 'supplier' | 'logistics' | 'company' | 'customer' | 'undetermined';
+  reason: string;
+  requested_amount: string;
+  currency: Currency;
+  proof_file_id?: string;
+}
+
+export interface ExecuteAfterSalesInput {
+  amount: string;
+  fx_rate_to_rmb: string;
+  fx_source: string;
+  fx_captured_at: string;
+  external_reference: string;
+  proof_file_id?: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;
   // Field-level validation messages from the global ValidationPipe, when present.
   fields?: string[];
+  code?: string;
+  details?: Record<string, unknown>;
 
-  constructor(status: number, message: string, fields?: string[]) {
+  constructor(
+    status: number,
+    message: string,
+    fields?: string[],
+    code?: string,
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.fields = fields;
+    this.code = code;
+    this.details = details;
   }
 }

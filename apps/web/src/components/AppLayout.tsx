@@ -1,45 +1,75 @@
-import { Link, Outlet } from 'react-router-dom';
+import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import { visibleNavigation } from './navigation';
 
 export function AppLayout() {
   const { user, logout } = useAuth();
+  const groups = visibleNavigation(user?.permissions ?? {}, user?.workflowMode);
   return (
-    <div style={{ fontFamily: 'system-ui' }}>
+    <div style={{ fontFamily: 'system-ui', minHeight: '100vh', background: '#f8fafc' }}>
       <header
         style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           padding: '12px 24px',
-          borderBottom: '1px solid #ddd',
+          borderBottom: '1px solid #e2e8f0',
+          background: '#0f172a',
+          color: 'white',
         }}
       >
-        <strong>KirinDesk</strong>
+        <strong style={{ letterSpacing: 0.3 }}>KirinDesk</strong>
         <span style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <Link to="/customers">客户</Link>
-          <Link to="/suppliers">供应商</Link>
-          <Link to="/orders">销售订单</Link>
-          <Link to="/purchase-orders">采购订单</Link>
-          <Link to="/files">文件</Link>
-          <Link to="/reports">报表</Link>
-          <Link to="/commission">提成</Link>
-          <Link to="/ai/ocr">OCR</Link>
-          <Link to="/ai/complete">AI 补全</Link>
-          <Link to="/users">用户</Link>
-          <Link to="/roles">角色</Link>
-          <Link to="/audit-logs">审计</Link>
-          <Link to="/support-access">支持访问</Link>
-          <Link to="/subscription">套餐</Link>
-          <Link to="/billing">账单</Link>
-          <Link to="/notification-settings">通知</Link>
-          <Link to="/settings">设置</Link>
-          <span style={{ color: '#555' }}>{user?.email}</span>
+          {user?.workflowMode === 'read_only' && (
+            <span style={{ color: '#fde68a', fontSize: 13 }}>业务闭环只读</span>
+          )}
+          <span style={{ color: '#cbd5e1', fontSize: 13 }}>{user?.email}</span>
           <button onClick={() => logout()}>登出</button>
         </span>
       </header>
-      <main style={{ padding: 24 }}>
-        <Outlet />
-      </main>
+      <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)' }}>
+        <nav
+          aria-label="主导航"
+          style={{ padding: '20px 14px', borderRight: '1px solid #e2e8f0', background: 'white' }}
+        >
+          {groups.map((group) => (
+            <section key={group.label} style={{ marginBottom: 22 }}>
+              <div
+                style={{
+                  padding: '0 10px 7px',
+                  color: '#64748b',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                }}
+              >
+                {group.label}
+              </div>
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  style={({ isActive }) => ({
+                    display: 'block',
+                    padding: '8px 10px',
+                    borderRadius: 7,
+                    color: isActive ? '#0f172a' : '#475569',
+                    background: isActive ? '#e2e8f0' : 'transparent',
+                    textDecoration: 'none',
+                    fontWeight: isActive ? 650 : 450,
+                  })}
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </section>
+          ))}
+        </nav>
+        <main style={{ padding: 28, minWidth: 0 }}>
+          <Outlet />
+        </main>
+      </div>
     </div>
   );
 }

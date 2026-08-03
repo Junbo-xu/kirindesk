@@ -1,9 +1,18 @@
-import { Global, Module } from '@nestjs/common';
+import { Global, Inject, Injectable, Module, OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from './redis.constants';
 import { RateLimitService } from './rate-limit.service';
 
 export { REDIS_CLIENT } from './redis.constants';
+
+@Injectable()
+class RedisLifecycle implements OnModuleDestroy {
+  constructor(@Inject(REDIS_CLIENT) private readonly client: Redis | null) {}
+
+  onModuleDestroy(): void {
+    this.client?.disconnect(false);
+  }
+}
 
 /**
  * Phase 2B: shared Redis client (@Global). Used so far only for signup IP rate
@@ -34,6 +43,7 @@ export { REDIS_CLIENT } from './redis.constants';
       },
     },
     RateLimitService,
+    RedisLifecycle,
   ],
   exports: [REDIS_CLIENT, RateLimitService],
 })

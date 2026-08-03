@@ -44,6 +44,20 @@ export function num(value: string | number | null | undefined): CsvCell {
 /** A blank separator row (renders as one empty CSV line). */
 export const BLANK_ROW: CsvCell[] = [txt('')];
 
+export interface ExportWatermarkActor {
+  tenantId: string;
+  userId: string;
+}
+
+export function exportWatermarkRows(actor: ExportWatermarkActor, exportedAt: Date): CsvCell[][] {
+  return [
+    [txt('水印'), txt('KirinDesk 授权导出，禁止未授权转发')],
+    [txt('租户'), txt(actor.tenantId)],
+    [txt('导出人'), txt(actor.userId)],
+    [txt('导出时间'), txt(exportedAt.toISOString())],
+  ];
+}
+
 const INJECTION_PREFIXES = ['=', '+', '-', '@', '\t', '\r'];
 
 function neutralize(value: string): string {

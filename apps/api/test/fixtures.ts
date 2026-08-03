@@ -132,6 +132,107 @@ export const SUPPORT_ACCESS_PERMS = [
 // an invoice. In SEED_PERMS so admin/sales roles hold them; the no-role user
 // lacks them for the 403 case.
 export const BILLING_PERMS = ['billing:view', 'billing:pay'] as const;
+export const FINANCE_PERMS = ['finance:view'] as const;
+
+export const WORKBENCH_PERMS = [
+  'workbench:view',
+  'business_events:view',
+  'business_exceptions:view',
+  'business_exceptions:assign',
+  'business_exceptions:resolve',
+  'business_exceptions:close',
+] as const;
+
+export const INQUIRY_PERMS = [
+  'inquiries:view',
+  'inquiries:create',
+  'inquiries:submit',
+  'inquiries:sanitize',
+] as const;
+export const QUOTE_SELECTION_PERMS = ['quote_selections:create', 'quote_selections:view'] as const;
+export const QUOTATION_PERMS = [
+  'quotations:view',
+  'quotations:manage',
+  'quotations:audit',
+] as const;
+
+const STAGE_2A_PERMS: { code: string; moduleId: string }[] = [
+  ...INQUIRY_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+  ...QUOTE_SELECTION_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+  ...QUOTATION_PERMS.slice(0, 2).map((code) => ({ code, moduleId: PROCUREMENT_MODULE_ID })),
+  { code: 'quotations:audit', moduleId: SYSTEM_MODULE_ID },
+];
+
+export const PROFORMA_INVOICE_PERMS = [
+  'proforma_invoices:view',
+  'proforma_invoices:create',
+  'proforma_invoices:issue',
+  'proforma_invoices:confirm',
+  'proforma_invoices:export',
+] as const;
+export const CUSTOMER_RECEIPT_PERMS = [
+  'customer_receipts:view',
+  'customer_receipts:record',
+  'customer_receipts:review',
+] as const;
+export const PROCUREMENT_GATE_PERMS = ['procurement_gate:view'] as const;
+
+const STAGE_2B_PERMS: { code: string; moduleId: string }[] = [
+  { code: 'quote_selections:approve_margin', moduleId: ORDERS_MODULE_ID },
+  ...PROFORMA_INVOICE_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+  ...CUSTOMER_RECEIPT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...PROCUREMENT_GATE_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+];
+
+export const FULFILLMENT_PERMS = [
+  'fulfillment:view',
+  'goods_receipts:manage',
+  'goods_receipts:confirm',
+  'shipments:manage',
+  'order_expenses:record',
+] as const;
+
+export const STAGE_2E_FINANCE_PERMS = [
+  'finance_reviews:view',
+  'finance_reviews:review',
+  'profit_snapshots:create',
+  'commission_rules:manage',
+  'commission_candidates:calculate',
+  'commission_candidates:lock',
+] as const;
+
+export const SAMPLE_ORDER_PERMS = [
+  'sample_orders:view',
+  'sample_orders:create',
+  'sample_orders:approve',
+  'sample_orders:fulfill',
+  'sample_orders:convert',
+] as const;
+
+export const AFTER_SALES_PERMS = [
+  'after_sales:view',
+  'after_sales:create',
+  'after_sales:approve',
+  'after_sales:execute',
+] as const;
+
+const STAGE_2F_PERMS: { code: string; moduleId: string }[] = [
+  ...SAMPLE_ORDER_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
+  ...AFTER_SALES_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+];
+
+const STAGE_2E_PERMS: { code: string; moduleId: string }[] = STAGE_2E_FINANCE_PERMS.map((code) => ({
+  code,
+  moduleId: FINANCE_MODULE_ID,
+}));
+
+const STAGE_2D_PERMS: { code: string; moduleId: string }[] = [
+  { code: 'fulfillment:view', moduleId: ORDERS_MODULE_ID },
+  { code: 'goods_receipts:manage', moduleId: PROCUREMENT_MODULE_ID },
+  { code: 'goods_receipts:confirm', moduleId: ORDERS_MODULE_ID },
+  { code: 'shipments:manage', moduleId: ORDERS_MODULE_ID },
+  { code: 'order_expenses:record', moduleId: FINANCE_MODULE_ID },
+];
 
 // All permissions granted to each fixture role, with their owning module id.
 const SEED_PERMS: { code: string; moduleId: string }[] = [
@@ -144,6 +245,9 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...COMMISSION_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...COMMISSION_PAYOUT_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...BILLING_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...FINANCE_PERMS.map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
+  ...WORKBENCH_PERMS.slice(0, 2).map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
+  ...WORKBENCH_PERMS.slice(2).map((code) => ({ code, moduleId: FINANCE_MODULE_ID })),
   ...AI_PERMS.map((code) => ({ code, moduleId: AI_MODULE_ID })),
   ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
   ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
@@ -280,6 +384,51 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
       );
     }
 
+    for (const { code, moduleId } of STAGE_2A_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
+    for (const { code, moduleId } of STAGE_2B_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
+    for (const { code, moduleId } of STAGE_2D_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
+    for (const { code, moduleId } of STAGE_2E_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
+    for (const { code, moduleId } of STAGE_2F_PERMS) {
+      const action = code.split(':')[1];
+      await client.query(
+        `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, $3)
+         ON CONFLICT (code) DO NOTHING`,
+        [moduleId, code, action],
+      );
+    }
+
     // Support-access permission rows (system module). Inserted so they exist,
     // but granted selectively below — NOT via the all-roles loop.
     for (const code of SUPPORT_ACCESS_PERMS) {
@@ -314,6 +463,109 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, $4)`,
           [spec.tenantId, spec.roleId, permId[code], spec.scope],
+        );
+      }
+    }
+
+    const stage2ePermissionRows = await client.query<{ id: string }>(
+      `SELECT id FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2E_FINANCE_PERMS as unknown as string[]],
+    );
+    for (const spec of ROLE_SPECS.filter((row) => row.roleId !== SALES_ROLE_ID)) {
+      for (const permission of stage2ePermissionRows.rows) {
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, 'all')`,
+          [spec.tenantId, spec.roleId, permission.id],
+        );
+      }
+    }
+
+    const stage2fPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2F_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const salesCodes: string[] = [
+        'sample_orders:view',
+        'sample_orders:create',
+        'sample_orders:convert',
+        'after_sales:view',
+        'after_sales:create',
+      ];
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID ? salesCodes : STAGE_2F_PERMS.map(({ code }) => code);
+      for (const permission of stage2fPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code)) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
+        );
+      }
+    }
+
+    const stage2dPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2D_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const salesCodes: string[] = [
+        'fulfillment:view',
+        'goods_receipts:confirm',
+        'shipments:manage',
+        'order_expenses:record',
+      ];
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID ? salesCodes : STAGE_2D_PERMS.map(({ code }) => code);
+      for (const permission of stage2dPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code)) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
+        );
+      }
+    }
+
+    const stage2aPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2A_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID
+          ? [...INQUIRY_PERMS, ...QUOTE_SELECTION_PERMS]
+          : STAGE_2A_PERMS.map(({ code }) => code);
+      for (const permission of stage2aPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code as (typeof allowedCodes)[number])) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
+        );
+      }
+    }
+
+    const stage2bPermissionRows = await client.query<{ id: string; code: string }>(
+      `SELECT id, code FROM permissions WHERE code = ANY($1)`,
+      [STAGE_2B_PERMS.map(({ code }) => code)],
+    );
+    for (const spec of ROLE_SPECS) {
+      const salesCodes: string[] = [
+        ...PROFORMA_INVOICE_PERMS,
+        'customer_receipts:view',
+        'customer_receipts:record',
+        ...PROCUREMENT_GATE_PERMS,
+      ];
+      const allowedCodes =
+        spec.roleId === SALES_ROLE_ID ? salesCodes : STAGE_2B_PERMS.map(({ code }) => code);
+      for (const permission of stage2bPermissionRows.rows) {
+        if (!allowedCodes.includes(permission.code)) continue;
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, $4)`,
+          [spec.tenantId, spec.roleId, permission.id, spec.scope],
         );
       }
     }
@@ -358,7 +610,7 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
     await client.query(
       `INSERT INTO tenant_quota_usage (tenant_id, user_count, storage_bytes, ai_calls_month, ai_calls_reset_at, updated_at)
        VALUES
-         ($1, 1, 0, 0, date_trunc('month', now()), now()),
+         ($1, 3, 0, 0, date_trunc('month', now()), now()),
          ($2, 1, 0, 0, date_trunc('month', now()), now())`,
       [TEST_TENANT_ID, TEST_TENANT2_ID],
     );

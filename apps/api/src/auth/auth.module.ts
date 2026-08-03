@@ -8,6 +8,10 @@ import { TenantAuthGuard } from './tenant-auth.guard';
 import { UsersModule } from '../users/users.module';
 import { AuditModule } from '../audit/audit.module';
 import { requireEnv } from '../common/env';
+import { AuthSessionModule } from '../auth-session/auth-session.module';
+import { LoginRateLimitGuard } from './login-rate-limit.guard';
+import { RedisModule } from '../redis/redis.module';
+import { RbacModule } from '../rbac/rbac.module';
 
 @Module({
   imports: [
@@ -22,9 +26,12 @@ import { requireEnv } from '../common/env';
     }),
     UsersModule,
     AuditModule,
+    AuthSessionModule,
+    RedisModule,
+    RbacModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, TenantJwtStrategy, TenantAuthGuard],
+  providers: [AuthService, TenantJwtStrategy, TenantAuthGuard, LoginRateLimitGuard],
   exports: [TenantAuthGuard],
 })
 export class AuthModule {}

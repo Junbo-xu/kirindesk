@@ -2,18 +2,24 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { ValidationPipe } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import pg from 'pg';
 import request from 'supertest';
 import { closePool } from '@kirindesk/database';
 import { AppModule } from '../src/app.module';
 import { APP_POOL } from '../src/database/database.module';
+import { FileNotFoundException } from '../src/files/files.errors';
+import { FilesService } from '../src/files/files.service';
+import { UserNotFoundException } from '../src/users/users.errors';
+import { UsersService } from '../src/users/users.service';
 import {
   TEST_ADMIN_EMAIL,
   TEST_PASSWORD,
   TEST_TENANT_ID,
   TEST_TENANT_SLUG,
   TEST_USER_EMAIL,
+  TEST_USER_ID,
 } from './fixtures';
 
 // Phase 1M subscription + quota integration (plan §6 / exec §4). Covers:
@@ -28,7 +34,11 @@ describe('Subscription & Quota API (integration)', () => {
   let pool: Pool;
   let adminToken: string;
   let platformToken: string;
+  let usersService: UsersService;
+  let filesService: FilesService;
   const createdTenantIds: string[] = [];
+  const createdUserIds: string[] = [];
+  const createdFileIds: string[] = [];
 
   const { Client } = pg;
   async function withAdmin<T>(fn: (c: pg.Client) => Promise<T>): Promise<T> {
@@ -38,6 +48,98 @@ describe('Subscription & Quota API (integration)', () => {
       return await fn(c);
     } finally {
       await c.end();
+    }
+  }
+
+  async function expectUserQuotaMatchesActiveUsers(
+    client: pg.Client,
+    expected: number,
+  ): Promise<void> {
+    const { rows } = await client.query<{
+      user_count: number;
+      active_user_count: number;
+    }>(
+      `SELECT q.user_count,
+              (SELECT COUNT(*)::integer
+                 FROM users u
+                WHERE u.tenant_id = q.tenant_id
+                  AND u.status = 'active'
+                  AND u.deleted_at IS NULL) AS active_user_count
+         FROM tenant_quota_usage q
+        WHERE q.tenant_id = $1`,
+      [TEST_TENANT_ID],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].user_count).toBe(expected);
+    expect(rows[0].user_count).toBe(rows[0].active_user_count);
+  }
+
+  async function runBehindTargetRowLock<T>(
+    targetTable: 'users' | 'files',
+    targetId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const warmConnections = await Promise.all([pool.connect(), pool.connect()]);
+    for (const connection of warmConnections) connection.release();
+
+    const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+    await blocker.connect();
+    let pending: Promise<T> | undefined;
+    try {
+      await blocker.query('BEGIN');
+      const lockQuery =
+        targetTable === 'users'
+          ? `SELECT id FROM users WHERE id = $1 FOR UPDATE`
+          : `SELECT id FROM files WHERE id = $1 FOR UPDATE`;
+      await blocker.query(lockQuery, [targetId]);
+      pending = operation();
+
+      const deadline = Date.now() + 5_000;
+      while (Date.now() < deadline) {
+        const waiting = await blocker.query<{ count: string }>(
+          `SELECT COUNT(*)::text AS count
+             FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock'
+              AND usename = 'kirindesk_app'`,
+        );
+        if (parseInt(waiting.rows[0].count, 10) >= 2) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+
+      const waiting = await blocker.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+           FROM pg_stat_activity
+          WHERE datname = current_database()
+            AND pid <> pg_backend_pid()
+            AND wait_event_type = 'Lock'
+            AND usename = 'kirindesk_app'`,
+      );
+      if (parseInt(waiting.rows[0].count, 10) < 2) {
+        const activity = await blocker.query<{
+          usename: string;
+          state: string;
+          wait_event_type: string | null;
+          wait_event: string | null;
+          query: string;
+        }>(
+          `SELECT usename, state, wait_event_type, wait_event, left(query, 240) AS query
+             FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()
+            ORDER BY pid`,
+        );
+        throw new Error(`Target row lock barrier timed out: ${JSON.stringify(activity.rows)}`);
+      }
+
+      await blocker.query('COMMIT');
+      return await pending;
+    } catch (error) {
+      await blocker.query('ROLLBACK').catch(() => undefined);
+      if (pending) await pending.catch(() => undefined);
+      throw error;
+    } finally {
+      await blocker.end();
     }
   }
 
@@ -58,6 +160,8 @@ describe('Subscription & Quota API (integration)', () => {
     );
     await app.init();
     pool = app.get<Pool>(APP_POOL);
+    usersService = app.get(UsersService);
+    filesService = app.get(FilesService);
 
     const login = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -80,11 +184,19 @@ describe('Subscription & Quota API (integration)', () => {
         [TEST_TENANT_ID],
       );
       await c.query(
-        `UPDATE tenant_quota_usage SET user_count = 1, storage_bytes = 0, ai_calls_month = 0,
+        `UPDATE tenant_quota_usage SET user_count = 3, storage_bytes = 0, ai_calls_month = 0,
           ai_calls_reset_at = date_trunc('month', now()), updated_at = now()
          WHERE tenant_id = $1`,
         [TEST_TENANT_ID],
       );
+      if (createdFileIds.length > 0) {
+        await c.query(`DELETE FROM files WHERE id = ANY($1::uuid[])`, [createdFileIds]);
+        createdFileIds.length = 0;
+      }
+      if (createdUserIds.length > 0) {
+        await c.query(`DELETE FROM users WHERE id = ANY($1::uuid[])`, [createdUserIds]);
+        createdUserIds.length = 0;
+      }
     });
 
     // Clean up any provisioned tenants.
@@ -184,6 +296,226 @@ describe('Subscription & Quota API (integration)', () => {
     expect(res.body.limit).toBe(3);
   });
 
+  it('concurrent user creates serialize on the quota row and only one reaches the last slot', async () => {
+    const prefix = `quota-race-${Date.now()}`;
+    await withAdmin(async (client) => {
+      await client.query(`UPDATE tenant_quota_usage SET user_count = 9 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
+    });
+
+    const responses = await Promise.all(
+      [1, 2].map((sequence) =>
+        request(app.getHttpServer())
+          .post('/api/users')
+          .set(bearer(adminToken))
+          .send({
+            email: `${prefix}-${sequence}@qa.local`,
+            password: 'Pass123!',
+            name: `Quota Race ${sequence}`,
+          }),
+      ),
+    );
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 429]);
+
+    await withAdmin(async (client) => {
+      const usage = await client.query<{ user_count: number }>(
+        `SELECT user_count FROM tenant_quota_usage WHERE tenant_id = $1`,
+        [TEST_TENANT_ID],
+      );
+      expect(usage.rows[0].user_count).toBe(10);
+
+      const created = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM users WHERE tenant_id = $1 AND email LIKE $2`,
+        [TEST_TENANT_ID, `${prefix}-%`],
+      );
+      expect(created.rows[0].count).toBe('1');
+      await client.query(`DELETE FROM users WHERE tenant_id = $1 AND email LIKE $2`, [
+        TEST_TENANT_ID,
+        `${prefix}-%`,
+      ]);
+    });
+  });
+
+  it('concurrent user deactivation releases one user slot exactly once', async () => {
+    const userId = randomUUID();
+    createdUserIds.push(userId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+         VALUES ($1, $2, $3, 'not-used', 'Quota Deactivate Race', 'active', false)`,
+        [userId, TEST_TENANT_ID, `quota-deactivate-${userId}@qa.local`],
+      );
+      await client.query(`UPDATE tenant_quota_usage SET user_count = 4 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
+    });
+
+    const actor = { userId: TEST_USER_ID, tenantId: TEST_TENANT_ID, dataScope: 'all' };
+    const outcomes = await runBehindTargetRowLock('users', userId, () =>
+      Promise.allSettled([1, 2].map(() => usersService.deactivate(actor, userId))),
+    );
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejection = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (rejection?.status === 'rejected') {
+      expect(rejection.reason).toBeInstanceOf(UserNotFoundException);
+    }
+
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+    });
+  });
+
+  it('concurrent status deactivation releases one user slot exactly once', async () => {
+    const userId = randomUUID();
+    createdUserIds.push(userId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+         VALUES ($1, $2, $3, 'not-used', 'Quota Status Race', 'active', false)`,
+        [userId, TEST_TENANT_ID, `quota-status-${userId}@qa.local`],
+      );
+      await client.query(`UPDATE tenant_quota_usage SET user_count = 4 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
+    });
+
+    const actor = { userId: TEST_USER_ID, tenantId: TEST_TENANT_ID, dataScope: 'all' };
+    const outcomes = await runBehindTargetRowLock('users', userId, () =>
+      Promise.allSettled(
+        [1, 2].map(() => usersService.update(actor, userId, { status: 'inactive' })),
+      ),
+    );
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+    });
+  });
+
+  it('active to inactive to deleted releases the user slot only on the active boundary', async () => {
+    const userId = randomUUID();
+    createdUserIds.push(userId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+         VALUES ($1, $2, $3, 'not-used', 'Quota State Machine', 'active', false)`,
+        [userId, TEST_TENANT_ID, `quota-state-${userId}@qa.local`],
+      );
+      await client.query(`UPDATE tenant_quota_usage SET user_count = 4 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
+      await expectUserQuotaMatchesActiveUsers(client, 4);
+    });
+
+    const actor = { userId: TEST_USER_ID, tenantId: TEST_TENANT_ID, dataScope: 'all' };
+    await usersService.update(actor, userId, { status: 'inactive' });
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+    });
+
+    await usersService.deactivate(actor, userId);
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+    });
+  });
+
+  it('inactive to active to inactive consumes and releases quota, and full-quota activation rolls back', async () => {
+    const userId = randomUUID();
+    createdUserIds.push(userId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+         VALUES ($1, $2, $3, 'not-used', 'Quota Reactivation', 'inactive', false)`,
+        [userId, TEST_TENANT_ID, `quota-reactivation-${userId}@qa.local`],
+      );
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+    });
+
+    const activate = await request(app.getHttpServer())
+      .patch(`/api/users/${userId}`)
+      .set(bearer(adminToken))
+      .send({ status: 'active' });
+    expect(activate.status).toBe(200);
+    expect(activate.body.status).toBe('active');
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 4);
+    });
+
+    const deactivate = await request(app.getHttpServer())
+      .patch(`/api/users/${userId}`)
+      .set(bearer(adminToken))
+      .send({ status: 'inactive' });
+    expect(deactivate.status).toBe(200);
+    expect(deactivate.body.status).toBe('inactive');
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+      await client.query(`UPDATE tenants SET plan_id = $1 WHERE id = $2`, [
+        FREE_PLAN_ID,
+        TEST_TENANT_ID,
+      ]);
+    });
+
+    const rejectedActivation = await request(app.getHttpServer())
+      .patch(`/api/users/${userId}`)
+      .set(bearer(adminToken))
+      .send({ status: 'active' });
+    expect(rejectedActivation.status).toBe(429);
+    expect(rejectedActivation.body).toMatchObject({
+      code: 'QUOTA_EXCEEDED',
+      quota: 'users',
+      limit: 3,
+      current: 3,
+    });
+
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+      const user = await client.query<{ status: string }>(
+        `SELECT status FROM users WHERE id = $1`,
+        [userId],
+      );
+      expect(user.rows[0].status).toBe('inactive');
+    });
+  });
+
+  it('concurrent status update and delete preserve the authoritative active user count', async () => {
+    const userId = randomUUID();
+    createdUserIds.push(userId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+         VALUES ($1, $2, $3, 'not-used', 'Quota Cross Entry Race', 'active', false)`,
+        [userId, TEST_TENANT_ID, `quota-cross-entry-${userId}@qa.local`],
+      );
+      await client.query(`UPDATE tenant_quota_usage SET user_count = 4 WHERE tenant_id = $1`, [
+        TEST_TENANT_ID,
+      ]);
+      await expectUserQuotaMatchesActiveUsers(client, 4);
+    });
+
+    const actor = { userId: TEST_USER_ID, tenantId: TEST_TENANT_ID, dataScope: 'all' };
+    const [statusUpdate, deletion] = await runBehindTargetRowLock('users', userId, () =>
+      Promise.allSettled([
+        usersService.update(actor, userId, { status: 'inactive' }),
+        usersService.deactivate(actor, userId),
+      ]),
+    );
+    expect(deletion.status).toBe('fulfilled');
+    if (statusUpdate.status === 'rejected') {
+      expect(statusUpdate.reason).toBeInstanceOf(UserNotFoundException);
+    }
+
+    await withAdmin(async (client) => {
+      await expectUserQuotaMatchesActiveUsers(client, 3);
+      const deleted = await client.query<{ status: string; deleted_at: Date | null }>(
+        `SELECT status, deleted_at FROM users WHERE id = $1`,
+        [userId],
+      );
+      expect(deleted.rows[0].status).toBe('inactive');
+      expect(deleted.rows[0].deleted_at).not.toBeNull();
+    });
+  });
+
   // ── 4. storage at limit → 429 ─────────────────────────────────────────────
 
   it('POST /api/files returns 429 QUOTA_EXCEEDED when storage is at free plan limit', async () => {
@@ -209,6 +541,49 @@ describe('Subscription & Quota API (integration)', () => {
     expect(res.status).toBe(429);
     expect(res.body.code).toBe('QUOTA_EXCEEDED');
     expect(res.body.quota).toBe('storage');
+  });
+
+  it('concurrent file deletion releases storage bytes exactly once', async () => {
+    const fileId = randomUUID();
+    const fileSize = 4_096;
+    createdFileIds.push(fileId);
+    await withAdmin(async (client) => {
+      await client.query(
+        `INSERT INTO files
+           (id, tenant_id, uploaded_by, original_name, storage_key, mime_type, size_bytes, sha256)
+         VALUES ($1, $2, $3, 'quota-race.pdf', $4, 'application/pdf', $5, $6)`,
+        [
+          fileId,
+          TEST_TENANT_ID,
+          TEST_USER_ID,
+          `${TEST_TENANT_ID}/${fileId}`,
+          fileSize,
+          'a'.repeat(64),
+        ],
+      );
+      await client.query(`UPDATE tenant_quota_usage SET storage_bytes = $1 WHERE tenant_id = $2`, [
+        String(fileSize * 5),
+        TEST_TENANT_ID,
+      ]);
+    });
+
+    const actor = { userId: TEST_USER_ID, tenantId: TEST_TENANT_ID, dataScope: 'all' };
+    const outcomes = await runBehindTargetRowLock('files', fileId, () =>
+      Promise.allSettled([1, 2].map(() => filesService.remove(actor, fileId))),
+    );
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const rejection = outcomes.find((outcome) => outcome.status === 'rejected');
+    if (rejection?.status === 'rejected') {
+      expect(rejection.reason).toBeInstanceOf(FileNotFoundException);
+    }
+
+    await withAdmin(async (client) => {
+      const usage = await client.query<{ storage_bytes: string }>(
+        `SELECT storage_bytes FROM tenant_quota_usage WHERE tenant_id = $1`,
+        [TEST_TENANT_ID],
+      );
+      expect(usage.rows[0].storage_bytes).toBe(String(fileSize * 4));
+    });
   });
 
   // ── 5. AI calls at limit → 429 ────────────────────────────────────────────

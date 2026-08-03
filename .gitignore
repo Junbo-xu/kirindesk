@@ -37,6 +37,9 @@ logs/
 
 # Coverage
 coverage/
+playwright-report/
+test-results/
+blob-report/
 
 # Turbo
 .turbo/

@@ -1,187 +1,68 @@
-# Quality Gate
+# KirinDesk 质量门禁
 
-This document describes KirinDesk's local quality gate and the future CI
-strategy. The gate combines the checks built in Phase 0J (lint, format,
-typecheck, build, unit / integration / security tests) into a small set of
-repeatable commands.
+本门禁用于阶段 1 及后续开发。它只使用隔离的测试数据库、Redis DB 1 和本地 MinIO，不部署、不发布，也不读取生产凭据或客户数据。
 
-> **Prerequisite for `verify:full`:** PostgreSQL must already be running
-> locally (`docker compose up -d postgres`). The verify scripts never start or
-> stop containers themselves — see [Data safety boundary](#data-safety-boundary).
+## 环境要求
 
-## Overview
+- Node.js 20 或更高版本
+- pnpm 9.15.4
+- Docker 与 Docker Compose
+- 首次运行浏览器测试前执行 `pnpm exec playwright install --with-deps chromium firefox webkit`
 
-Two layers, split by whether they need Docker / a database:
+启动基础设施：
 
-| Layer         | When to run                               | Needs Docker/DB |
-| ------------- | ----------------------------------------- | --------------- |
-| **fast gate** | Frequently, after each change             | No              |
-| **full gate** | Before commit, phase switch, auth/db work | Yes (postgres)  |
-
-- **fast gate** keeps the inner loop quick: static checks + build + unit tests,
-  no database.
-- **full gate** adds the integration and security suites that lock in the
-  tenant-isolation, RLS, and append-only-audit invariants. These need a live
-  PostgreSQL and an isolated `kirindesk_test` database.
-
-## Commands
-
-| Command             | Expands to                                                      |
-| ------------------- | --------------------------------------------------------------- |
-| `pnpm verify:fast`  | `lint && format:check && typecheck && build && test:unit`       |
-| `pnpm verify:full`  | `verify:fast && test:integration && test:security`              |
-| `pnpm verify`       | alias for `verify:full` (default is the complete gate)          |
-
-`verify:full` runs serially with `&&` (fail fast). `test:integration` runs
-**before** `test:security` because the security script reuses the
-`kirindesk_test` database that the integration setup builds and seeds.
-
-<!-- PLACEHOLDER_WHEN -->
-
-## When to run which
-
-### Run `verify:fast`
-
-Day-to-day, after each change. It is the quick feedback loop and touches no
-database, so it is safe to run anytime without Docker.
-
-### Run `verify:full`
-
-- Before any commit that includes code.
-- Before switching phases.
-- After any change to **auth, RBAC, audit, or database** code. These directly
-  affect tenant isolation, the audit hash chain, and RLS, which the security
-  regression suite is specifically designed to protect. A green `verify:full`
-  is the evidence that those invariants still hold.
-
-### docs-only changes
-
-If `git diff --name-only` shows only Markdown / `docs/` files, the full gate is
-unnecessary. At most run `pnpm format:check` (and only if a `.ts` file under the
-formatter's glob changed). Pure `.md` edits need no build or tests — confirm the
-diff is docs-only and proceed.
-
-<!-- PLACEHOLDER_SAFETY -->
-
-## Data safety boundary
-
-The quality gate must never touch development or production data.
-
-- **`verify:full` uses `kirindesk_test` only.** The integration setup and the
-  security script both assert `current_database() = 'kirindesk_test'` before any
-  write, and refuse to run otherwise.
-- **`kirindesk_dev` is never written.** No gate connects to it, cleans it, or
-  seeds it.
-- **No production database, ever.** Connection config is env-first
-  (`TEST_DATABASE_URL` / `TEST_APP_DATABASE_URL`) with a local-dev fallback that
-  is hardcoded to `localhost .../kirindesk_test`. Production connection strings
-  never appear on the gate path. The API runtime reads `APP_DATABASE_URL` only,
-  and the security suite proves the API refuses to start under a superuser role.
-- **`test:integration` rebuilds `kirindesk_test` every run** (DROP / CREATE /
-  migrate / seed a minimal fixture), so each run is fully isolated.
-- **`test:security` depends on `test:integration` running first.** It reuses the
-  `kirindesk_test` that integration built; its precondition check reports
-  "run `pnpm test:integration` first" if the database or fixture is missing.
-
-### Docker is not auto-started
-
-`verify:full` does **not** start or stop containers. If PostgreSQL is not
-running, it fails with a clear hint:
-
-```
-docker compose up -d postgres
+```bash
+docker compose up -d --wait postgres redis minio
+docker compose run --rm minio-init
 ```
 
-This is deliberate: the gate never mutates your local environment (no implicit
-`docker compose up`, no container teardown). Start postgres yourself, then run
-the gate.
+默认服务使用 PostgreSQL 5432、Redis 6379、MinIO 9000/9001。端口冲突时可用 `POSTGRES_PORT`、`REDIS_PORT`、`S3_PORT` 和 `S3_CONSOLE_PORT` 覆盖。
 
-<!-- PLACEHOLDER_CI -->
+## 命令
 
-## CI strategy (draft)
+| 命令 | 真实执行内容 |
+| --- | --- |
+| `pnpm verify:fast` | 所有活动 workspace 的 lint、格式、typecheck、build、unit test，以及 production dependency audit |
+| `pnpm test:integration` | 重建 `kirindesk_test`、执行全部迁移并运行 API 集成测试 |
+| `pnpm verify:migrations` | 在 `kirindesk_test` 回滚最近两份迁移，再按原校验和前滚恢复 |
+| `pnpm test:security` | 启动失败策略、非超级用户运行、审计权限、RLS、会话和配额静态回归 |
+| `pnpm test:e2e` | Chromium、Firefox、WebKit 下的十二步业务、样品、售后、角色导航、租户/平台登录隔离回归 |
+| `pnpm verify:full` | 依次执行以上完整门禁 |
+| `pnpm verify:release` | 仅在本机测试设施执行影子迁移对账、PostgreSQL/MinIO 备份恢复、应用只读/隐藏回滚和性能/指标回归 |
 
-This is a **draft only**. No CI is configured yet: there is no git remote, no
-`.github/workflows`, and no `gh` setup. This section is the plan for when a
-remote exists. Nothing here is active.
+本地完整门禁需要显式提供测试连接串。Redis URL 必须指向 DB 1；集成 setup 会拒绝并且不会清空其他 Redis DB。
 
-When CI is set up, a single workflow runs the same gate on push / PR:
-
-1. Checkout, set up Node + pnpm, `pnpm install`.
-2. `pnpm verify:fast` (no database needed).
-3. Start a PostgreSQL service, then `pnpm test:integration` and
-   `pnpm test:security`.
-
-Only **one service** is needed today: `postgres`. Nothing in the current test
-path uses Redis, so it is omitted until a later phase introduces it.
-
-Sketch (illustrative, not committed anywhere — do not copy into `.github/`
-during Phase 0J):
-
-```yaml
-# DRAFT — not active. For reference only.
-name: ci
-on: [push, pull_request]
-jobs:
-  verify:
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: kirindesk
-          POSTGRES_PASSWORD: ci_test_password   # CI test value, NOT production
-          POSTGRES_DB: kirindesk_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U kirindesk"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      # Test-only connection strings, injected into the test process. The
-      # runtime never receives a global DATABASE_URL / APP_DATABASE_URL here.
-      TEST_DATABASE_URL: postgresql://kirindesk:ci_test_password@localhost:5432/kirindesk_test
-      TEST_APP_DATABASE_URL: postgresql://kirindesk_app:ci_app_test_password@localhost:5432/kirindesk_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm verify:fast
-      - run: pnpm test:integration
-      - run: pnpm test:security
+```bash
+export TEST_DATABASE_URL=postgresql://kirindesk:kirindesk_dev_password@127.0.0.1:5432/kirindesk_test
+export TEST_APP_DATABASE_URL=postgresql://kirindesk_app:kirindesk_app_dev_password@127.0.0.1:5432/kirindesk_test
+export APP_DB_PASSWORD=kirindesk_app_dev_password
+export REDIS_URL=redis://127.0.0.1:6379/1
+pnpm verify:full
+pnpm verify:release
 ```
 
-<!-- PLACEHOLDER_CI2 -->
+## 数据安全边界
 
-### CI constraints
+- 集成测试在任何写入前断言数据库名必须是 `kirindesk_test`。
+- 迁移往返演练拒绝任何非 `kirindesk_test` 数据库。
+- 发布数据演练同时拒绝非 loopback PostgreSQL 和非 `kirindesk_test` 数据库；运行时演练还要求管理库与应用库位于同一本地测试实例，并固定使用 Redis DB 1。
+- 影子库由正式 migrator 建立 `049` 基线，复制隔离测试库中所有可由该基线表达的真实事实，再实际前滚 `050`；不执行 DOWN、不修改源库，完整恢复库另行保留并对账全部 `050` 事实。
+- 对象恢复演练拒绝非 loopback S3 端点，只写入随机 canary 和随机恢复 bucket，并在结束时清理。
+- Redis 清理拒绝 DB 0 和任何非 DB 1 地址。
+- API 运行时只读取 `APP_DATABASE_URL`，安全回归证明超级用户连接会导致启动失败。
+- CI 中的数据库、JWT、Redis 和 MinIO 凭据均为一次性测试值。
+- 门禁不启动生产部署，不推送分支，不创建发布标签。
 
-- **No deploy.** CI runs the verify gate only. It must not deploy, publish, or
-  push anywhere. Deployment is a separate, future, explicitly-approved phase.
-- **Test secrets only.** All credentials in CI are throwaway test values. No
-  production secret is ever placed in CI config or repository secrets.
-- **`kirindesk_app` password is migration-owned.** Migration `000_app_role.sql`
-  creates the restricted role with a fixed password
-  (`kirindesk_app_dev_password`). The `TEST_APP_DATABASE_URL` in CI must use
-  that same password so the role can log in. (The draft above uses a
-  placeholder; align it with the migration when CI is actually wired up, or
-  parameterize the role password in the migration first.)
-- **Isolated test DB.** CI uses its own ephemeral `kirindesk_test` inside the
-  service container — never a shared dev or production database.
-- **No remote / secrets yet.** Until a remote and CI secrets exist, this draft
-  cannot run. Do not create `.github/workflows` during Phase 0J just to have it
-  sit dead.
+## CI
 
-## Future Claude Code Agent Team / Workflows
+`.github/workflows/quality-gate.yml` 在 PR 和非 `main` 分支 push 上运行完整门禁：
 
-Planning notes only. Nothing here is enabled in Phase 0J.
+1. 使用 Node.js 22 与 pnpm 9.15.4 安装锁定依赖。
+2. 安装锁文件对应的 Chromium、Firefox、WebKit 及系统依赖。
+3. 启动固定版本 PostgreSQL、Redis、MinIO，并初始化测试 bucket。
+4. 执行 `pnpm verify:full` 和 `pnpm verify:release`。
+5. 无论成功或失败都输出基础设施日志，不部署任何环境。
 
-- Agent Team is initially limited to **read-only** work: review, test-result
-  analysis, risk re-checks, and documentation tidying.
-- Agents must **not** auto-create migrations, change the database, commit to
-  Git, deploy, or modify `CLAUDE.md` / `.claude/`.
-- Workflows / Hooks are initially limited to **reminders and checks**: they do
-  not auto-modify files, do not auto-commit, and do not auto-run destructive
-  commands.
-- A dedicated **Phase 0J-F — Agent Team / Workflow Plan** should be planned
-  after Phase 0J Closure.
-- No agent, workflow, hook, or `.github` configuration is created in this phase.
+## 依赖审计例外
+
+`pnpm audit:prod` 会解析 `pnpm audit --prod --json`，对每条 high/critical 通告执行失败关闭。例外必须记录包名、不可利用证据、责任人、到期日和移除条件；缺字段或过期都会使门禁失败。当前例外见 `docs/dependency-audit-exceptions.json`。

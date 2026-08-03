@@ -1,0 +1,12 @@
+{
+  "exceptions": [
+    {
+      "advisoryId": "GHSA-qwww-vcr4-c8h2",
+      "package": "react-router",
+      "owner": "Rin",
+      "expiresOn": "2026-08-30",
+      "evidence": "KirinDesk web uses BrowserRouter declarative mode and does not import unstable RSC APIs. The advisory explicitly applies only to unstable RSC action handling. The registry has no react-router-dom 8.3.0 release as of 2026-07-30; the lockfile uses 7.18.2, which patches all published high advisories applicable to declarative mode.",
+      "remediation": "Remove this exception immediately when a published React Router release patches GHSA-qwww-vcr4-c8h2 on the supported declarative-mode line, or before enabling any RSC API."
+    }
+  ]
+}

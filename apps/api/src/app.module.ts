@@ -25,10 +25,21 @@ import { SubscriptionModule } from './subscription/subscription.module';
 import { NotificationModule } from './notification/notification.module';
 import { BillingModule } from './billing/billing.module';
 import { SignupModule } from './signup/signup.module';
+import { InquiriesModule } from './inquiries/inquiries.module';
+import { WorkbenchModule } from './workbench/workbench.module';
+import { CommercialModule } from './commercial/commercial.module';
+import { ProcurementModule } from './procurement/procurement.module';
+import { FulfillmentModule } from './fulfillment/fulfillment.module';
+import { FinanceModule } from './finance/finance.module';
+import { SamplesAfterSalesModule } from './samples-after-sales/samples-after-sales.module';
+import { ReleaseModule } from './release/release.module';
+import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
   imports: [
     DatabaseModule,
+    ReleaseModule,
+    ObservabilityModule,
     HealthModule,
     AuthModule,
     PlatformAuthModule,
@@ -54,6 +65,13 @@ import { SignupModule } from './signup/signup.module';
     NotificationModule,
     BillingModule,
     SignupModule,
+    InquiriesModule,
+    WorkbenchModule,
+    CommercialModule,
+    ProcurementModule,
+    FulfillmentModule,
+    FinanceModule,
+    SamplesAfterSalesModule,
   ],
 })
 export class AppModule {}

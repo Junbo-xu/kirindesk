@@ -7,6 +7,9 @@ import { PlatformJwtStrategy } from './platform-jwt.strategy';
 import { PlatformAuthGuard } from './platform-auth.guard';
 import { AuditModule } from '../audit/audit.module';
 import { requireEnv } from '../common/env';
+import { AuthSessionModule } from '../auth-session/auth-session.module';
+import { RedisModule } from '../redis/redis.module';
+import { LoginRateLimitGuard } from '../auth/login-rate-limit.guard';
 
 @Module({
   imports: [
@@ -20,9 +23,11 @@ import { requireEnv } from '../common/env';
       },
     }),
     AuditModule,
+    AuthSessionModule,
+    RedisModule,
   ],
   controllers: [PlatformAuthController],
-  providers: [PlatformAuthService, PlatformJwtStrategy, PlatformAuthGuard],
+  providers: [PlatformAuthService, PlatformJwtStrategy, PlatformAuthGuard, LoginRateLimitGuard],
   exports: [PlatformAuthGuard],
 })
 export class PlatformAuthModule {}

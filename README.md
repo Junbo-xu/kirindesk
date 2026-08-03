@@ -4,7 +4,7 @@ Multi-tenant SaaS platform for foreign trade customer management.
 
 ## Prerequisites
 
-- Node.js >= 18
+- Node.js >= 20
 - pnpm >= 9
 - Docker & Docker Compose
 
@@ -17,8 +17,9 @@ cp .env.example .env
 # Install dependencies
 pnpm install
 
-# Start infrastructure (PostgreSQL + Redis)
-docker compose up -d
+# Start healthy infrastructure and create the MinIO bucket
+docker compose up -d --wait postgres redis minio
+docker compose run --rm minio-init
 
 # Run database migrations
 pnpm db:migrate
@@ -48,11 +49,16 @@ pnpm db:verify-chain   # Verify audit log hash chain integrity
 
 ## Authentication
 
-KirinDesk uses dual JWT secrets for tenant/platform isolation:
+KirinDesk uses dual JWT secrets and server-side session records for tenant/platform isolation:
 
 - `TENANT_JWT_SECRET` — signs and verifies tenant user tokens
 - `PLATFORM_JWT_SECRET` — signs and verifies platform admin tokens
 - Default token expiry is 2h (development). In production, reduce to 15-30 minutes.
+- Logout revokes the current session immediately; every authenticated request rechecks session, account, and tenant status.
+
+## Quality Gate
+
+Run `pnpm verify:fast` during development, `pnpm verify:full` before review, and `pnpm verify:release` for a release candidate. The full and release gates require isolated PostgreSQL/Redis/MinIO services plus Chromium, Firefox, and WebKit. See `docs/quality-gate.md` and `docs/stage-3-release-candidate.md` for the exact test-only environment, rollback modes, and safety checks.
 
 Dev credentials (local development only, NOT production accounts):
 - Tenant user: `admin@dev.local` / `dev-password-123` (tenant slug: `dev-tenant`)

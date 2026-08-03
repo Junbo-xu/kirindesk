@@ -6,17 +6,19 @@ import { OCR_PROVIDER } from './ocr-provider.interface';
 import { AI_PROVIDER } from './ai-provider.interface';
 import { MockOcrProvider } from './mock-ocr-provider';
 import { MockAiProvider } from './mock-ai-provider';
-import { resolveAiOcrProviderName } from './ai.config';
+import {
+  resolveAiOcrProviderName,
+  resolveAiTextProviderName,
+  resolveDeepSeekConfig,
+} from './ai.config';
+import { DeepSeekAiProvider } from './deepseek-ai-provider';
 import { AiService } from './ai.service';
 import { AiController } from './ai.controller';
 
 /**
  * Wires the active OCR and AI providers behind their DI tokens (plan §3.6).
- * The factories read AI_OCR_PROVIDER at startup; the only supported value is
- * `mock`, and resolveAiOcrProviderName throws on anything else, so a
- * misconfigured / unapproved vendor fails fast rather than starting on a real
- * backend (CLAUDE.md §7). Global so any module can inject the tokens without
- * re-importing.
+ * OCR remains local-only. Text AI may use the approved DeepSeek adapter, whose
+ * endpoint/model/key/budget configuration is validated before construction.
  */
 @Global()
 @Module({
@@ -36,8 +38,10 @@ import { AiController } from './ai.controller';
     {
       provide: AI_PROVIDER,
       useFactory: () => {
-        resolveAiOcrProviderName();
-        return new MockAiProvider();
+        const provider = resolveAiTextProviderName();
+        return provider === 'deepseek'
+          ? new DeepSeekAiProvider(resolveDeepSeekConfig())
+          : new MockAiProvider();
       },
     },
     AiService,

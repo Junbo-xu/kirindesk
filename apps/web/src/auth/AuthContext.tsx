@@ -15,6 +15,8 @@ interface AuthContextValue {
   status: AuthStatus;
   login: (email: string, password: string, tenantSlug: string) => Promise<void>;
   logout: () => Promise<void>;
+  hasPermission: (code: string) => boolean;
+  hasAnyPermission: (codes: string[]) => boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -68,8 +70,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     reset();
   }
 
+  const hasPermission = (code: string) => Boolean(user?.permissions[code]);
+  const hasAnyPermission = (codes: string[]) => codes.some(hasPermission);
+
   return (
-    <AuthContext.Provider value={{ user, status, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, status, login, logout, hasPermission, hasAnyPermission }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 

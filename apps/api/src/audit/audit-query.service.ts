@@ -64,6 +64,7 @@ const DETAIL_COLUMNS = `${SUMMARY_COLUMNS}, al.before_json, al.after_json, al.me
        al.reason, al.request_id, al.ip_address, al.user_agent`;
 
 const ACTOR_JOIN = `LEFT JOIN users u ON u.id = al.actor_id AND al.actor_type = 'tenant_user'`;
+const GENERAL_AUDIT_SCOPE = `al.resource_type <> 'supplier_quotation'`;
 
 /**
  * Read-only query service for the audit-log viewer (plan §3.6). Strictly
@@ -90,7 +91,7 @@ export class AuditQueryService {
     actor: RequestActor,
     filters: AuditLogFilters,
   ): { where: string; params: unknown[] } {
-    const conditions: string[] = [];
+    const conditions: string[] = [GENERAL_AUDIT_SCOPE];
     const params: unknown[] = [];
 
     // Explicit tenant scope (plan §3.4 isolation). RLS already pins a
@@ -233,7 +234,7 @@ export class AuditQueryService {
         // (tenant_id IS NULL) rows a platform_admin support session could
         // otherwise read via audit_logs_tenant_read; a no-op for tenant_user.
         params.push(actor.tenantId);
-        let scopeClause = ` AND al.tenant_id = $${params.length}`;
+        let scopeClause = ` AND al.tenant_id = $${params.length} AND ${GENERAL_AUDIT_SCOPE}`;
         if (this.restrictsToOwner(actor.dataScope)) {
           params.push(actor.userId);
           scopeClause += ` AND al.actor_id = $${params.length}`;

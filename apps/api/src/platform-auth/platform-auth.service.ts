@@ -4,6 +4,8 @@ import * as bcrypt from 'bcryptjs';
 import type { Pool } from 'pg';
 import { APP_POOL } from '../database/database.module';
 import { AuditService } from '../audit/audit.service';
+import { randomUUID } from 'node:crypto';
+import { AuthSessionService } from '../auth-session/auth-session.service';
 
 const DUMMY_BCRYPT_HASH = bcrypt.hashSync('__dummy_never_match__', 12);
 
@@ -13,6 +15,7 @@ export class PlatformAuthService {
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly jwtService: JwtService,
     private readonly auditService: AuditService,
+    private readonly sessions: AuthSessionService,
   ) {}
 
   async login(email: string, password: string, meta: { ip?: string; ua?: string }) {
@@ -39,8 +42,23 @@ export class PlatformAuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const payload = { sub: admin.id, type: 'platform_admin', email: admin.email };
+    const sessionId = randomUUID();
+    const payload = {
+      sub: admin.id,
+      type: 'platform_admin',
+      email: admin.email,
+      sid: sessionId,
+    };
     const accessToken = this.jwtService.sign(payload);
+    const decoded = this.jwtService.decode(accessToken) as { exp?: number };
+    if (!decoded.exp) throw new Error('Signed platform token has no expiration.');
+    await this.sessions.createPlatformSession({
+      sessionId,
+      actorId: admin.id,
+      expiresAt: new Date(decoded.exp * 1000),
+      ip: meta.ip,
+      userAgent: meta.ua,
+    });
 
     await this.auditService.log({
       tenantId: null,
@@ -54,6 +72,24 @@ export class PlatformAuthService {
     });
 
     return { accessToken, admin: { id: admin.id, email: admin.email, name: admin.name } };
+  }
+
+  async logout(
+    admin: { sub: string; sid: string },
+    meta: { ip?: string; ua?: string },
+  ): Promise<void> {
+    await this.sessions.revokePlatformSession(admin.sid, admin.sub);
+    await this.auditService.log({
+      tenantId: null,
+      actorType: 'platform_admin',
+      actorId: admin.sub,
+      action: 'auth:logout',
+      resourceType: 'platform_admin',
+      resourceId: admin.sub,
+      metadata: { sessionId: admin.sid },
+      ipAddress: meta.ip,
+      userAgent: meta.ua,
+    });
   }
 
   private async logFailed(email: string, reason: string, meta: { ip?: string; ua?: string }) {
