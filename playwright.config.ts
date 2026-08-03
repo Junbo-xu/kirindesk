@@ -10,6 +10,9 @@ const testAppDatabaseUrl =
 export default defineConfig({
   testDir: './apps/web/e2e',
   fullyParallel: false,
+  // Every project exercises the same mutable tenant in kirindesk_test.
+  // Serial workers prevent tenant-wide settings from leaking across specs.
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? 'github' : 'list',
