@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "verify:deepseek": "tsx src/ai/verify-deepseek.ts"
+    "verify:deepseek": "nest build && node dist/ai/verify-deepseek.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1066.0",
