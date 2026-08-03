@@ -40,7 +40,9 @@ function runtimeEnvironment(mode) {
     S3_BUCKET: process.env.S3_BUCKET ?? 'kirindesk-files-test',
     S3_ACCESS_KEY: process.env.S3_ACCESS_KEY ?? 'release-rehearsal-access',
     S3_SECRET_KEY: process.env.S3_SECRET_KEY ?? 'release-rehearsal-secret',
-    LOGIN_RATE_LIMIT_MAX: '100',
+    // Authentication rate limiting has its own integration coverage. This
+    // rehearsal reuses Redis DB 1 after E2E, so fixture logins need headroom.
+    LOGIN_RATE_LIMIT_MAX: process.env.RELEASE_LOGIN_RATE_LIMIT_MAX ?? '10000',
     LOGIN_RATE_LIMIT_WINDOW_SEC: '900',
     WORKFLOW_RELEASE_MODE: mode,
   };

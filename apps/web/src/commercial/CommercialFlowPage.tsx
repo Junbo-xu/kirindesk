@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
 import { saveBlob } from '../lib/download';
@@ -235,6 +235,7 @@ function ReceiptPanel({ orderId, currency }: { orderId: string; currency: Curren
 
 export function CommercialFlowPage() {
   const { hasPermission } = useAuth();
+  const inquiryLoadSequence = useRef(0);
   const [inquiries, setInquiries] = useState<InquirySummary[]>([]);
   const [inquiryId, setInquiryId] = useState('');
   const [quotations, setQuotations] = useState<SalesQuotation[]>([]);
@@ -265,11 +266,13 @@ export function CommercialFlowPage() {
   );
 
   async function loadInquiry(id: string) {
+    const sequence = ++inquiryLoadSequence.current;
     const [quoteRows, selectionRows, piRows] = await Promise.all([
       apiClient.listSalesQuotations(id),
       apiClient.listSelections(id),
       apiClient.listProformaInvoices(id),
     ]);
+    if (sequence !== inquiryLoadSequence.current) return;
     setQuotations(quoteRows);
     setSelections(selectionRows);
     setPis(piRows);
