@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { TenantAuthGuard } from '../auth/tenant-auth.guard';
 import { PermissionGuard } from '../rbac/permission.guard';
@@ -8,6 +18,7 @@ import { ModuleGuard, RequireModule } from '../subscription/module.guard';
 import { QuotaGuard } from '../subscription/quota.guard';
 import { CheckQuota } from '../subscription/quota.service';
 import { CreateInquiryDto } from './dto/create-inquiry.dto';
+import { SubmitInquiryDto, UpdateInquiryDto } from './dto/update-inquiry.dto';
 import { CreateSelectionDto } from './dto/create-selection.dto';
 import { InquiriesService, RequestActor } from './inquiries.service';
 import { QuotationsService } from './quotations.service';
@@ -60,14 +71,26 @@ export class InquiriesController {
     return this.inquiries.getOne(this.actor(user, req), id);
   }
 
+  @Patch(':id')
+  @RequirePermission('inquiries', 'update')
+  async updateDraft(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateInquiryDto,
+  ) {
+    return this.inquiries.updateDraft(this.actor(user, req), id, dto);
+  }
+
   @Post(':id/submit')
   @RequirePermission('inquiries', 'submit')
   async submit(
     @CurrentUser() user: TenantJwtUser,
     @Req() req: Request,
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SubmitInquiryDto,
   ) {
-    return this.inquiries.submit(this.actor(user, req), id);
+    return this.inquiries.submit(this.actor(user, req), id, dto.expected_version);
   }
 
   @Post(':id/sanitize')

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
+import { PageLoadFailure, PageLoadState, toPageLoadFailure } from '../components/PageLoadState';
 import {
   ApiError,
   CommissionBasisType,
@@ -78,6 +79,8 @@ export function FinanceWorkspacePage() {
   const [detail, setDetail] = useState<FinanceOrderDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<PageLoadFailure | null>(null);
   const [returnReason, setReturnReason] = useState('');
   const [lockComment, setLockComment] = useState('');
   const [revisionReason, setRevisionReason] = useState('');
@@ -160,8 +163,20 @@ export function FinanceWorkspacePage() {
   }
 
   useEffect(() => {
-    void loadOrders().catch((caught) => setError(errorMessage(caught)));
+    void loadPage();
   }, []);
+
+  async function loadPage() {
+    setInitialLoading(true);
+    setLoadFailure(null);
+    try {
+      await loadOrders();
+    } catch (caught) {
+      setLoadFailure(toPageLoadFailure(caught, '财务页面加载失败'));
+    } finally {
+      setInitialLoading(false);
+    }
+  }
 
   async function run(action: () => Promise<unknown>) {
     if (!orderId) return;
@@ -297,6 +312,22 @@ export function FinanceWorkspacePage() {
         allocations: mapped,
         revision_reason: candidateRevisionRequired ? revisionReason : undefined,
       }),
+    );
+  }
+
+  if (initialLoading || loadFailure) {
+    return (
+      <section className="finance-workspace" data-testid="finance-workspace">
+        <header className="finance-heading">
+          <h1>财务核对、利润与提成</h1>
+        </header>
+        <PageLoadState
+          loading={initialLoading}
+          failure={loadFailure}
+          loadingText="正在加载财务数据…"
+          onRetry={() => void loadPage()}
+        />
+      </section>
     );
   }
 

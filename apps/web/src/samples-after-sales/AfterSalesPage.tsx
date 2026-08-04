@@ -21,6 +21,7 @@ const statusLabel: Record<AfterSalesCaseStatus, string> = {
   executing: '执行中',
   completed: '调整已入账',
   closed: '已关闭',
+  unknown: '未知状态',
 };
 
 const responsibilityLabel: Record<AfterSalesCase['responsibility'], string> = {
@@ -424,6 +425,12 @@ export function AfterSalesPage() {
               <strong>{row.case_number}</strong>
               <span>
                 {statusLabel[row.status]} · {row.order_number}
+                {row.status_diagnostic && (
+                  <small role="status">
+                    状态诊断：{row.status_diagnostic.code}（原值{' '}
+                    {row.status_diagnostic.received_status}）
+                  </small>
+                )}
               </span>
             </button>
           ))}
@@ -443,6 +450,12 @@ export function AfterSalesPage() {
                 <span className={`ops-badge ${selected.status}`}>
                   {statusLabel[selected.status]}
                 </span>
+                {selected.status_diagnostic && (
+                  <span className="ops-alert" role="alert">
+                    {selected.status_diagnostic.code}：原始状态“
+                    {selected.status_diagnostic.received_status}”不受支持
+                  </span>
+                )}
               </header>
 
               <section className="ops-section">

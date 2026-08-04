@@ -28,6 +28,23 @@ export class RbacService {
       this.pool,
       { tenantId, userId, actorType: 'tenant_user' },
       async (client) => {
+        const owner = await client.query<{ is_tenant_owner: boolean }>(
+          `SELECT is_tenant_owner
+             FROM users
+            WHERE id = $1 AND tenant_id = $2 AND status = 'active' AND deleted_at IS NULL`,
+          [userId, tenantId],
+        );
+        if (owner.rows[0]?.is_tenant_owner) {
+          const permission = await client.query<{ exists: boolean }>(
+            `SELECT EXISTS(SELECT 1 FROM permissions WHERE code = $1) AS exists`,
+            [permissionCode],
+          );
+          return {
+            allowed: permission.rows[0]?.exists === true,
+            dataScope: permission.rows[0]?.exists === true ? 'all' : 'none',
+          };
+        }
+
         const { rows } = await client.query<{ data_scope: string }>(
           `SELECT rp.data_scope
            FROM user_roles ur
@@ -59,6 +76,19 @@ export class RbacService {
       this.pool,
       { tenantId, userId, actorType: 'tenant_user' },
       async (client) => {
+        const owner = await client.query<{ is_tenant_owner: boolean }>(
+          `SELECT is_tenant_owner
+             FROM users
+            WHERE id = $1 AND tenant_id = $2 AND status = 'active' AND deleted_at IS NULL`,
+          [userId, tenantId],
+        );
+        if (owner.rows[0]?.is_tenant_owner) {
+          const permissions = await client.query<{ code: string }>(
+            `SELECT code FROM permissions ORDER BY code`,
+          );
+          return new Map(permissions.rows.map((permission) => [permission.code, 'all']));
+        }
+
         const { rows } = await client.query<{ code: string; data_scope: string }>(
           `SELECT p.code, rp.data_scope
            FROM user_roles ur
