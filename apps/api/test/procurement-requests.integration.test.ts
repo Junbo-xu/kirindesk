@@ -24,6 +24,8 @@ const APPROVER2_ID = '88888888-8888-4888-8888-888888888888';
 const APPROVER2_EMAIL = 'procurement-approver2@test.local';
 const APPROVER3_ID = '99999999-9999-4999-8999-999999999999';
 const APPROVER3_EMAIL = 'procurement-approver3@test.local';
+const SELF_REQUESTER_ID = 'a8888888-8888-4888-8888-888888888888';
+const SELF_REQUESTER_EMAIL = 'procurement-self-requester@test.local';
 const CUSTOMER_ID = 'a0000000-0000-4000-8000-000000000001';
 const SUPPLIER1_ID = 'b0000000-0000-4000-8000-000000000001';
 const SUPPLIER2_ID = 'b0000000-0000-4000-8000-000000000002';
@@ -48,6 +50,7 @@ describe('Stage 2C procurement requests (integration)', () => {
   let salesToken: string;
   let approver2Token: string;
   let approver3Token: string;
+  let selfRequesterToken: string;
   let tenant2Token: string;
   let requestId: string;
   let requestConfigVersion: number;
@@ -132,12 +135,19 @@ describe('Stage 2C procurement requests (integration)', () => {
           [APPROVER3_ID, APPROVER3_EMAIL, TEST_USER_ID],
         );
         await client.query(
+          `INSERT INTO users
+             (id, tenant_id, email, password_hash, name, status, is_tenant_owner)
+           SELECT $1, tenant_id, $2, password_hash, 'Procurement Self Requester', 'active', false
+             FROM users WHERE id = $3`,
+          [SELF_REQUESTER_ID, SELF_REQUESTER_EMAIL, TEST_USER_ID],
+        );
+        await client.query(
           `INSERT INTO user_roles (tenant_id, user_id, role_id)
            SELECT tenant_id, approver_id, role_id
              FROM user_roles
              CROSS JOIN unnest($1::uuid[]) AS approvers(approver_id)
             WHERE user_id = $2`,
-          [[APPROVER2_ID, APPROVER3_ID], TEST_USER_ID],
+          [[APPROVER2_ID, APPROVER3_ID, SELF_REQUESTER_ID], TEST_USER_ID],
         );
         await client.query(
           `INSERT INTO customers
@@ -307,6 +317,7 @@ describe('Stage 2C procurement requests (integration)', () => {
     salesToken = await login(TEST_USER2_EMAIL);
     approver2Token = await login(APPROVER2_EMAIL);
     approver3Token = await login(APPROVER3_EMAIL);
+    selfRequesterToken = await login(SELF_REQUESTER_EMAIL);
     tenant2Token = await login(TEST_USER3_EMAIL, TEST_TENANT2_SLUG);
   });
 
@@ -410,6 +421,33 @@ describe('Stage 2C procurement requests (integration)', () => {
     expect(first.body.purchase_orders).toEqual([]);
   });
 
+  it('rejects a request whose active approval flow contains the requester', async () => {
+    const selfApprovalConfig = await request(app.getHttpServer())
+      .put('/api/procurement/approval-config')
+      .set(bearer(adminToken))
+      .send({
+        price_variance_threshold_bps: 500,
+        steps: [{ approver_user_id: SELF_REQUESTER_ID }, { approver_user_id: APPROVER2_ID }],
+      });
+    expect(selfApprovalConfig.status, JSON.stringify(selfApprovalConfig.body)).toBe(200);
+
+    const denied = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${SALES_ORDER_ID}/procurement-requests`)
+      .set(bearer(selfRequesterToken))
+      .send({ items: [{ selection_id: SELECTION1_ID, quantity: '1' }] });
+    expect(denied.status).toBe(403);
+    expect(denied.body.code).toBe('PROCUREMENT_REQUESTER_APPROVER_CONFLICT');
+
+    const restored = await request(app.getHttpServer())
+      .put('/api/procurement/approval-config')
+      .set(bearer(adminToken))
+      .send({
+        price_variance_threshold_bps: 500,
+        steps: [{ approver_user_id: APPROVER2_ID }, { approver_user_id: APPROVER3_ID }],
+      });
+    expect(restored.status).toBe(200);
+  });
+
   it('appends the final decision and splits the approved request by supplier', async () => {
     const approved = await request(app.getHttpServer())
       .post(`/api/procurement-requests/${requestId}/decisions`)
@@ -472,6 +510,48 @@ describe('Stage 2C procurement requests (integration)', () => {
         );
       }),
     ).rejects.toThrow(/append-only/);
+  });
+
+  it('does not let a legacy purchase-order record enter controlled placement', async () => {
+    const legacy = await request(app.getHttpServer())
+      .post('/api/purchase-orders')
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: SUPPLIER1_ID,
+        order_number: 'PO-LEGACY-CANNOT-PLACE',
+        pi_number: 'PI-STAGE-2C',
+        currency: 'USD',
+        items: [{ description: 'Legacy bypass attempt', quantity: '1', unit_price: '1' }],
+      });
+    expect(legacy.status).toBe(201);
+    expect(legacy.body.source_procurement_request_id).toBeNull();
+
+    const placement = await request(app.getHttpServer())
+      .post(`/api/purchase-orders/${legacy.body.id as string}/place`)
+      .set(bearer(adminToken))
+      .send({
+        items: [
+          {
+            item_id: legacy.body.items[0].id,
+            final_unit_price: '1.0000',
+          },
+        ],
+      });
+    expect(placement.status).toBe(404);
+
+    const evidence = await withAdmin(async (client) => {
+      const links = await client.query(
+        `SELECT id FROM sales_order_purchase_orders WHERE purchase_order_id = $1`,
+        [legacy.body.id],
+      );
+      const placedAudits = await client.query(
+        `SELECT id FROM audit_logs
+          WHERE tenant_id = $1 AND resource_id = $2 AND action = 'purchase_order.placed'`,
+        [TEST_TENANT_ID, legacy.body.id],
+      );
+      return { links: links.rows, placedAudits: placedAudits.rows };
+    });
+    expect(evidence).toEqual({ links: [], placedAudits: [] });
   });
 
   it('serializes placement behind a concurrent gate close without side effects', async () => {

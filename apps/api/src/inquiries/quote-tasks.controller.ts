@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   ParseUUIDPipe,
+  Post,
   Put,
   Req,
   UseGuards,
@@ -15,6 +16,8 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { ModuleGuard, RequireModule } from '../subscription/module.guard';
+import { QuotaGuard } from '../subscription/quota.guard';
+import { CheckQuota } from '../subscription/quota.service';
 import { ManualQuoteTaskDto } from './dto/manual-quote-task.dto';
 import { UpsertQuotationDto } from './dto/upsert-quotation.dto';
 import { InquiriesService, RequestActor } from './inquiries.service';
@@ -67,6 +70,18 @@ export class QuoteTasksController {
     @Body() dto: ManualQuoteTaskDto,
   ) {
     return this.inquiries.manuallyCorrect(this.actor(user, req), id, dto);
+  }
+
+  @Post(':id/retry')
+  @UseGuards(QuotaGuard)
+  @CheckQuota('ai')
+  @RequirePermission('quotations', 'manage')
+  async retry(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.inquiries.retrySanitization(this.actor(user, req), id);
   }
 
   @Get(':id/quotations')

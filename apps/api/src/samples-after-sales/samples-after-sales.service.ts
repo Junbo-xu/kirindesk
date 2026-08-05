@@ -28,6 +28,7 @@ import {
   SampleAfterSalesDutyException,
   SampleAfterSalesNotFoundException,
 } from './samples-after-sales.errors';
+import { normalizeAfterSalesCaseStatus } from './after-sales-status';
 
 export interface SamplesAfterSalesActor {
   userId: string;
@@ -1307,6 +1308,7 @@ export class SamplesAfterSalesService {
       [row.id],
     );
     const currentStep = steps.rows.find((step) => !step.decision)?.step_no ?? null;
+    const normalizedStatus = normalizeAfterSalesCaseStatus(row.status);
     return {
       id: row.id,
       sales_order_id: row.sales_order_id,
@@ -1319,7 +1321,7 @@ export class SamplesAfterSalesService {
       requested_amount: row.requested_amount,
       currency: row.currency,
       proof_file_id: row.proof_file_id,
-      status: row.status,
+      ...normalizedStatus,
       requested_by: row.requested_by,
       approval_config: { id: row.approval_config_id, version: row.approval_config_version },
       current_approval_step: row.status === 'pending_approval' ? currentStep : null,

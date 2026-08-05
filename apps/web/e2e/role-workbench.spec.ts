@@ -73,9 +73,7 @@ const ROLE_SPECS: RoleSpec[] = [
 
 async function json<T>(response: Awaited<ReturnType<APIRequestContext['get']>>): Promise<T> {
   if (!response.ok()) {
-    throw new Error(
-      `${response.request().method()} ${response.url()} failed: ${response.status()} ${await response.text()}`,
-    );
+    throw new Error(`${response.url()} failed: ${response.status()} ${await response.text()}`);
   }
   const body = await response.text();
   return (body ? JSON.parse(body) : undefined) as T;

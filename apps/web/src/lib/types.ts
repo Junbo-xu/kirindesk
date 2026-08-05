@@ -83,18 +83,44 @@ export interface InquiryItemSummary {
   id: string;
   line_no: number;
   description: string;
+  specifications: string | null;
   quantity: string;
   unit: string;
+  target_price_usd: string | null;
 }
 
 export interface InquirySummary {
   id: string;
+  owner_user_id: string;
   customer_id: string | null;
   customer_code: string;
   customer_country: string;
+  customer_message: string;
+  source_version: number;
   status: string;
+  submitted_at: string | null;
   created_at: string;
+  updated_at: string;
   items: InquiryItemSummary[];
+}
+
+export interface InquiryItemInput {
+  description: string;
+  specifications?: string;
+  quantity: string;
+  unit: string;
+  target_price_usd?: string;
+}
+
+export interface CreateInquiryInput {
+  customer_code: string;
+  customer_country: string;
+  customer_message: string;
+  items: InquiryItemInput[];
+}
+
+export interface UpdateInquiryInput extends CreateInquiryInput {
+  expected_version: number;
 }
 
 export interface SalesQuotationLine {
@@ -379,6 +405,46 @@ export interface QuoteTaskSummary {
   last_error_code: string | null;
   attempt_count: number;
   updated_at: string;
+}
+
+export interface ProcurementQuotationLine {
+  id: string;
+  inquiry_item_id: string;
+  variant_key: string;
+  variant_value: string;
+  quantity: string;
+  unit_price: string;
+  minimum_quantity: string | null;
+  lead_time_days: number | null;
+  terms: string | null;
+}
+
+export interface ProcurementQuotation {
+  id: string;
+  inquiry_id: string;
+  supplier_id: string;
+  entered_by: string;
+  version: number;
+  currency: Currency;
+  valid_until: string;
+  source_text: string | null;
+  created_at: string;
+  updated_at: string;
+  lines: ProcurementQuotationLine[];
+}
+
+export interface QuotationOverwriteSequence {
+  quotation_id: string;
+  complete: true;
+  current_version: number;
+  sequence: Array<{
+    event_id: string;
+    action: 'supplier_quotation.created' | 'supplier_quotation.replaced';
+    actor_id: string;
+    before: Record<string, unknown> | null;
+    after: Record<string, unknown>;
+    created_at: string;
+  }>;
 }
 
 export interface LoginResponse {
@@ -1597,7 +1663,8 @@ export type AfterSalesCaseStatus =
   | 'rejected'
   | 'executing'
   | 'completed'
-  | 'closed';
+  | 'closed'
+  | 'unknown';
 
 export interface AfterSalesApprovalStep {
   id: string;
@@ -1638,6 +1705,11 @@ export interface AfterSalesCase {
   currency: Currency;
   proof_file_id: string | null;
   status: AfterSalesCaseStatus;
+  status_diagnostic: {
+    code: 'UNKNOWN_AFTER_SALES_STATUS';
+    received_status: string;
+    message: string;
+  } | null;
   requested_by: string;
   approval_config: { id: string; version: number };
   current_approval_step: number | null;

@@ -193,6 +193,19 @@ describe('Tenant Onboarding API (integration)', () => {
     expect(login.status).toBe(200);
     expect(typeof login.body.accessToken).toBe('string');
     expect(login.body.accessToken.length).toBeGreaterThan(10);
+
+    const me = await request(app.getHttpServer())
+      .get('/api/auth/me')
+      .set(bearer(login.body.accessToken as string));
+    expect(me.status).toBe(200);
+    expect(me.body.permissions).toEqual(
+      expect.objectContaining({
+        'inquiries:view': 'all',
+        'quotations:manage': 'all',
+        'finance_reviews:review': 'all',
+        'after_sales:execute': 'all',
+      }),
+    );
   });
 
   it('audit_log_chains supports verify-chain from genesis', async () => {

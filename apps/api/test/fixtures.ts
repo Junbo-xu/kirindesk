@@ -146,6 +146,7 @@ export const WORKBENCH_PERMS = [
 export const INQUIRY_PERMS = [
   'inquiries:view',
   'inquiries:create',
+  'inquiries:update',
   'inquiries:submit',
   'inquiries:sanitize',
 ] as const;

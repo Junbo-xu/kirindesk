@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+ARG KIRINDESK_BUILD_COMMIT=unknown
 # Phase 3A — KirinDesk API image (private deployment).
 # Multi-stage: a full-workspace build stage (also reused as the one-shot migrate
 # container, since it has tsx + the database package + db/migrations), and a
@@ -34,6 +35,8 @@ RUN pnpm --filter @kirindesk/api --prod deploy /prod/api
 
 # ── runtime: minimal, non-root, runs the compiled API ───────────────────────
 FROM node:22-alpine AS runtime
+ARG KIRINDESK_BUILD_COMMIT
+LABEL org.opencontainers.image.revision=$KIRINDESK_BUILD_COMMIT
 ENV NODE_ENV=production
 WORKDIR /app
 # pnpm deploy emits node_modules + package.json; bring in the compiled dist too.

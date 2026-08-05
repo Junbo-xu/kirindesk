@@ -21,7 +21,23 @@ export class ListSalesOrdersQuery {
   q?: string;
 
   @IsOptional()
-  @IsIn(['draft', 'confirmed', 'completed', 'cancelled'])
+  @IsIn([
+    'draft',
+    'pending_approval',
+    'approved',
+    'rejected',
+    'confirmed',
+    'completed',
+    'customer_confirmed',
+    'payment_gate_open',
+    'procurement',
+    'fulfillment',
+    'delivered',
+    'finance_review',
+    'settled',
+    'cancelled',
+    'on_hold',
+  ])
   status?: string;
 
   @IsOptional()

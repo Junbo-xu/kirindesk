@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+ARG KIRINDESK_BUILD_COMMIT=unknown
 # Phase 3A — KirinDesk Web image (private deployment).
 # Builds the Vite/React static bundle, then serves it from nginx. nginx also
 # reverse-proxies /api to the API container so the app is same-origin and the
@@ -19,6 +20,8 @@ RUN pnpm --filter @kirindesk/web build
 
 # ── runtime: nginx serving the static bundle + /api reverse proxy ───────────
 FROM nginx:1.27-alpine AS runtime
+ARG KIRINDESK_BUILD_COMMIT
+LABEL org.opencontainers.image.revision=$KIRINDESK_BUILD_COMMIT
 # Site config lives in the repo so the proxy target is reviewable/versioned.
 COPY docker/nginx/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /repo/apps/web/dist /usr/share/nginx/html

@@ -13,6 +13,7 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'orders:delete', '删除订单', 'delete'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'inquiries:view', '查看询盘', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'inquiries:create', '创建询盘', 'create'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'inquiries:update', '编辑询盘草稿', 'update'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'inquiries:submit', '提交询盘', 'submit'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'inquiries:sanitize', '生成脱敏报价任务', 'sanitize'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'quote_selections:create', '选择报价', 'create'),
