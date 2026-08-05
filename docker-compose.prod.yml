@@ -114,6 +114,8 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
       target: runtime
+      args:
+        KIRINDESK_BUILD_COMMIT: ${KIRINDESK_BUILD_COMMIT:-unknown}
     restart: unless-stopped
     environment:
       NODE_ENV: ${NODE_ENV:-production}
@@ -188,6 +190,8 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       target: runtime
+      args:
+        KIRINDESK_BUILD_COMMIT: ${KIRINDESK_BUILD_COMMIT:-unknown}
     restart: unless-stopped
     # The ONLY service published to the host. Default 8080; override via WEB_HTTP_PORT.
     ports:
