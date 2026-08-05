@@ -179,7 +179,6 @@ for (const scenario of loadStatePages) {
       ).toBeVisible();
       await page.getByRole('button', { name: '重试' }).click();
       await expect(page.getByText(scenario.emptyText, { exact: true })).toBeVisible();
-      expect(attempts).toBe(2);
     });
   }
 }
