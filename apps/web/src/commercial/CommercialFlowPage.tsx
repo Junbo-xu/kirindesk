@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
 import { saveBlob } from '../lib/download';
+import { PageLoadFailure, PageLoadState, toPageLoadFailure } from '../components/PageLoadState';
 import {
   ApiError,
   CommercialSelection,
@@ -258,6 +259,8 @@ export function CommercialFlowPage() {
   const [marginReasons, setMarginReasons] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<PageLoadFailure | null>(null);
 
   const inquiry = inquiries.find((row) => row.id === inquiryId) ?? null;
   const allocatedSelections = useMemo(
@@ -294,17 +297,29 @@ export function CommercialFlowPage() {
     if (nextId) await loadInquiry(nextId);
   }
 
+  async function loadPage() {
+    setInitialLoading(true);
+    setLoadFailure(null);
+    try {
+      await Promise.all([
+        reloadAll(),
+        apiClient.listCustomers({ pageSize: 100 }).then((result) => setCustomers(result.data)),
+        hasPermission('tenant_settings:view')
+          ? apiClient.getCommercialSettings().then((value) => {
+              setSettings(value);
+              setDraftSettings(value);
+            })
+          : Promise.resolve(),
+      ]);
+    } catch (caught) {
+      setLoadFailure(toPageLoadFailure(caught, '商务页面加载失败'));
+    } finally {
+      setInitialLoading(false);
+    }
+  }
+
   useEffect(() => {
-    Promise.all([
-      reloadAll(),
-      apiClient.listCustomers({ pageSize: 100 }).then((result) => setCustomers(result.data)),
-      hasPermission('tenant_settings:view')
-        ? apiClient.getCommercialSettings().then((value) => {
-            setSettings(value);
-            setDraftSettings(value);
-          })
-        : Promise.resolve(),
-    ]).catch((err) => setError(errorMessage(err)));
+    void loadPage();
   }, []);
 
   async function run(action: () => Promise<unknown>) {
@@ -385,6 +400,28 @@ export function CommercialFlowPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (initialLoading || loadFailure || inquiries.length === 0) {
+    return (
+      <section style={{ maxWidth: 1180 }}>
+        <h1 style={{ fontSize: 24, marginTop: 0 }}>选价、PI 与收款闸门</h1>
+        <p style={{ color: '#64748b' }}>
+          采购价、销售价、汇率和毛利均读取冻结快照；到款记录不代表第三方支付成功。
+        </p>
+        <PageLoadState
+          loading={initialLoading}
+          failure={loadFailure}
+          loadingText="正在加载商务数据…"
+          onRetry={() => void loadPage()}
+        />
+        {!initialLoading && !loadFailure && (
+          <p role="status" style={{ color: '#64748b' }}>
+            暂无可处理询盘。
+          </p>
+        )}
+      </section>
+    );
   }
 
   return (

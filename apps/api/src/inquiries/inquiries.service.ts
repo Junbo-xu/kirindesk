@@ -10,6 +10,7 @@ import {
   AiTimeoutException,
 } from '../ai/ai.errors';
 import { CreateInquiryDto } from './dto/create-inquiry.dto';
+import { UpdateInquiryDto } from './dto/update-inquiry.dto';
 import { ManualQuoteTaskDto } from './dto/manual-quote-task.dto';
 import {
   InquiryNotFoundException,
@@ -78,6 +79,54 @@ export class InquiriesService {
     return dataScope === 'own' || dataScope === 'assigned';
   }
 
+  private validateInput(dto: CreateInquiryDto | UpdateInquiryDto): {
+    customerCode: string;
+    customerCountry: string;
+    customerMessage: string;
+  } {
+    const customerCode = dto.customer_code.trim();
+    const customerCountry = dto.customer_country.trim();
+    const customerMessage = dto.customer_message.trim();
+    if (
+      !customerCode ||
+      !customerCountry ||
+      !customerMessage ||
+      dto.items.some(
+        (item) => isZeroDecimal(item.quantity) || !item.description.trim() || !item.unit.trim(),
+      )
+    ) {
+      throw new InvalidInquiryDataException('Inquiry item quantity must be greater than zero');
+    }
+    return { customerCode, customerCountry, customerMessage };
+  }
+
+  private async replaceItems(
+    client: PoolClient,
+    actor: RequestActor,
+    inquiryId: string,
+    items: CreateInquiryDto['items'],
+  ): Promise<void> {
+    await client.query(`DELETE FROM inquiry_items WHERE inquiry_id = $1`, [inquiryId]);
+    for (const [index, item] of items.entries()) {
+      await client.query(
+        `INSERT INTO inquiry_items
+           (tenant_id, inquiry_id, line_no, description, specifications,
+            quantity, unit, target_price_usd)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          actor.tenantId,
+          inquiryId,
+          index + 1,
+          item.description.trim(),
+          item.specifications?.trim() || null,
+          item.quantity,
+          item.unit.trim(),
+          item.target_price_usd ?? null,
+        ],
+      );
+    }
+  }
+
   private async items(client: PoolClient, inquiryId: string): Promise<InquiryItemRow[]> {
     const result = await client.query<InquiryItemRow>(
       `SELECT ${ITEM_COLUMNS}
@@ -112,19 +161,7 @@ export class InquiriesService {
   }
 
   async create(actor: RequestActor, dto: CreateInquiryDto): Promise<InquiryResponse> {
-    const customerCode = dto.customer_code.trim();
-    const customerCountry = dto.customer_country.trim();
-    const customerMessage = dto.customer_message.trim();
-    if (
-      !customerCode ||
-      !customerCountry ||
-      !customerMessage ||
-      dto.items.some(
-        (item) => isZeroDecimal(item.quantity) || !item.description.trim() || !item.unit.trim(),
-      )
-    ) {
-      throw new InvalidInquiryDataException('Inquiry item quantity must be greater than zero');
-    }
+    const { customerCode, customerCountry, customerMessage } = this.validateInput(dto);
 
     return withTenantContext(
       this.pool,
@@ -138,24 +175,7 @@ export class InquiriesService {
           [actor.tenantId, actor.userId, customerCode, customerCountry, customerMessage],
         );
         const row = created.rows[0];
-        for (const [index, item] of dto.items.entries()) {
-          await client.query(
-            `INSERT INTO inquiry_items
-               (tenant_id, inquiry_id, line_no, description, specifications,
-                quantity, unit, target_price_usd)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-            [
-              actor.tenantId,
-              row.id,
-              index + 1,
-              item.description.trim(),
-              item.specifications?.trim() || null,
-              item.quantity,
-              item.unit.trim(),
-              item.target_price_usd ?? null,
-            ],
-          );
-        }
+        await this.replaceItems(client, actor, row.id, dto.items);
         const inquiryItems = await this.items(client, row.id);
         const response = toInquiryResponse(row, inquiryItems);
         await this.audit.logInTransaction(client, {
@@ -165,6 +185,55 @@ export class InquiriesService {
           action: 'inquiry.created',
           resourceType: 'inquiry',
           resourceId: row.id,
+          after: response,
+        });
+        return response;
+      },
+    );
+  }
+
+  async updateDraft(
+    actor: RequestActor,
+    inquiryId: string,
+    dto: UpdateInquiryDto,
+  ): Promise<InquiryResponse> {
+    const { customerCode, customerCountry, customerMessage } = this.validateInput(dto);
+    return withTenantContext(
+      this.pool,
+      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      async (client) => {
+        const beforeRow = await this.inquiry(client, actor, inquiryId, true);
+        if (beforeRow.status !== 'draft') {
+          throw new InquiryStateConflictException('Only a draft inquiry can be edited');
+        }
+        if (beforeRow.source_version !== dto.expected_version) {
+          throw new InquiryStateConflictException('Inquiry version changed; reload and retry');
+        }
+        const before = toInquiryResponse(beforeRow, await this.items(client, inquiryId));
+        const updated = await client.query<InquiryRow>(
+          `UPDATE inquiries
+              SET customer_code = $2,
+                  customer_country = $3,
+                  customer_message = $4,
+                  source_version = source_version + 1,
+                  updated_at = now()
+            WHERE id = $1 AND status = 'draft' AND source_version = $5
+          RETURNING ${INQUIRY_COLUMNS}`,
+          [inquiryId, customerCode, customerCountry, customerMessage, dto.expected_version],
+        );
+        if (updated.rows.length !== 1) {
+          throw new InquiryStateConflictException('Inquiry version changed; reload and retry');
+        }
+        await this.replaceItems(client, actor, inquiryId, dto.items);
+        const response = toInquiryResponse(updated.rows[0], await this.items(client, inquiryId));
+        await this.audit.logInTransaction(client, {
+          tenantId: actor.tenantId,
+          actorType: 'tenant_user',
+          actorId: actor.userId,
+          action: 'inquiry.updated',
+          resourceType: 'inquiry',
+          resourceId: inquiryId,
+          before,
           after: response,
         });
         return response;
@@ -212,6 +281,7 @@ export class InquiriesService {
   async submit(
     actor: RequestActor,
     inquiryId: string,
+    expectedVersion?: number,
   ): Promise<{ inquiry: InquiryResponse; quote_task: QuoteTaskResponse }> {
     return withTenantContext(
       this.pool,
@@ -220,6 +290,9 @@ export class InquiriesService {
         const before = await this.inquiry(client, actor, inquiryId, true);
         if (before.status !== 'draft') {
           throw new InquiryStateConflictException('Only a draft inquiry can be submitted');
+        }
+        if (expectedVersion !== undefined && before.source_version !== expectedVersion) {
+          throw new InquiryStateConflictException('Inquiry version changed; reload and retry');
         }
         const updated = await client.query<InquiryRow>(
           `UPDATE inquiries
@@ -418,6 +491,17 @@ export class InquiriesService {
             WHERE id = $1`,
           [task.id, attempt],
         );
+        if (attempt > 1) {
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'quote_task.retry_started',
+            resourceType: 'quote_task',
+            resourceId: task.id,
+            after: { attempt, previous_status: task.sanitization_status },
+          });
+        }
         return {
           taskId: task.id,
           attempt,
@@ -555,6 +639,31 @@ export class InquiriesService {
         invocationId: outcome.response.invocation.id,
         errorCode: 'invalid_structured_output',
       });
+    }
+  }
+
+  async retrySanitization(actor: RequestActor, taskId: string): Promise<QuoteTaskResponse> {
+    const current = await this.getQuoteTask(actor, taskId);
+    if (['processing', 'ready', 'manually_corrected'].includes(current.sanitization_status)) {
+      return current;
+    }
+    if (
+      !['timeout', 'rate_limited', 'parse_failed', 'provider_failed'].includes(
+        current.sanitization_status,
+      )
+    ) {
+      throw new InquiryStateConflictException('Only a failed quote task can be retried');
+    }
+    try {
+      return await this.sanitize(actor, current.inquiry_id);
+    } catch (error) {
+      if (error instanceof InquiryStateConflictException) {
+        const latest = await this.getQuoteTask(actor, taskId);
+        if (['processing', 'ready', 'manually_corrected'].includes(latest.sanitization_status)) {
+          return latest;
+        }
+      }
+      throw error;
     }
   }
 }

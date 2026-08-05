@@ -82,10 +82,13 @@ import {
   FulfillmentOrder,
   FulfillmentSettings,
   GoodsReceipt,
+  CreateInquiryInput,
   InquirySummary,
   OrderExpense,
   ProcurementGate,
+  ProcurementQuotation,
   ProformaInvoice,
+  QuotationOverwriteSequence,
   QuoteTaskSummary,
   SalesQuotation,
   Shipment,
@@ -102,6 +105,7 @@ import {
   CreateSampleOrderInput,
   ExecuteAfterSalesInput,
   SampleOrder,
+  UpdateInquiryInput,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -322,6 +326,12 @@ export const apiClient = {
   },
   listInquiries(): Promise<InquirySummary[]> {
     return request<InquirySummary[]>('/api/inquiries');
+  },
+  createInquiry(input: CreateInquiryInput): Promise<InquirySummary> {
+    return request<InquirySummary>('/api/inquiries', { method: 'POST', body: input });
+  },
+  updateInquiry(id: string, input: UpdateInquiryInput): Promise<InquirySummary> {
+    return request<InquirySummary>(`/api/inquiries/${id}`, { method: 'PATCH', body: input });
   },
   getInquiry(id: string): Promise<InquirySummary> {
     return request<InquirySummary>(`/api/inquiries/${id}`);
@@ -550,11 +560,48 @@ export const apiClient = {
       body: { customer_receipt_id: customerReceiptId },
     });
   },
-  submitInquiry(id: string): Promise<{ inquiry: InquirySummary }> {
-    return request<{ inquiry: InquirySummary }>(`/api/inquiries/${id}/submit`, { method: 'POST' });
+  submitInquiry(id: string, expectedVersion: number): Promise<{ inquiry: InquirySummary }> {
+    return request<{ inquiry: InquirySummary }>(`/api/inquiries/${id}/submit`, {
+      method: 'POST',
+      body: { expected_version: expectedVersion },
+    });
   },
   listQuoteTasks(): Promise<QuoteTaskSummary[]> {
     return request<QuoteTaskSummary[]>('/api/quote-tasks');
+  },
+  retryQuoteTask(id: string): Promise<QuoteTaskSummary> {
+    return request<QuoteTaskSummary>(`/api/quote-tasks/${id}/retry`, { method: 'POST' });
+  },
+  listTaskQuotations(id: string): Promise<ProcurementQuotation[]> {
+    return request<ProcurementQuotation[]>(`/api/quote-tasks/${id}/quotations`);
+  },
+  upsertTaskQuotation(
+    id: string,
+    input: {
+      supplier_id: string;
+      expected_version: number;
+      currency: Currency;
+      valid_until: string;
+      source_text?: string;
+      lines: Array<{
+        inquiry_item_id: string;
+        variant_key?: string;
+        variant_value?: string;
+        quantity: string;
+        unit_price: string;
+        minimum_quantity?: string;
+        lead_time_days?: number;
+        terms?: string;
+      }>;
+    },
+  ): Promise<ProcurementQuotation> {
+    return request<ProcurementQuotation>(`/api/quote-tasks/${id}/quotations`, {
+      method: 'PUT',
+      body: input,
+    });
+  },
+  getQuotationOverwriteSequence(id: string): Promise<QuotationOverwriteSequence> {
+    return request<QuotationOverwriteSequence>(`/api/quotations/${id}/overwrite-sequence`);
   },
   logout(): Promise<{ message: string }> {
     return request<{ message: string }>('/api/auth/logout', { method: 'POST' });

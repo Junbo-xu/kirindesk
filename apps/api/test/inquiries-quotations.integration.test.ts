@@ -221,6 +221,102 @@ describe('Stage 2A inquiry and quotation workflow (integration)', () => {
     expect(salesTasks.status).toBe(403);
   });
 
+  it('edits only owned drafts with optimistic concurrency and validated product rows', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/inquiries')
+      .set(bearer(salesToken))
+      .send({
+        customer_code: 'EDITABLE-LEAD',
+        customer_country: 'GB',
+        customer_message: 'Initial private request',
+        items: [{ description: 'Initial item', quantity: '1.000', unit: 'pcs' }],
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.source_version).toBe(1);
+
+    const updates = [
+      {
+        expected_version: 1,
+        customer_code: 'EDITABLE-LEAD-A',
+        customer_country: 'GB',
+        customer_message: 'Updated private request A',
+        items: [
+          { description: 'Bottle', specifications: 'Blue', quantity: '10.000', unit: 'pcs' },
+          { description: 'Carton', quantity: '2.500', unit: 'box' },
+        ],
+      },
+      {
+        expected_version: 1,
+        customer_code: 'EDITABLE-LEAD-B',
+        customer_country: 'GB',
+        customer_message: 'Updated private request B',
+        items: [{ description: 'Competing item', quantity: '3.000', unit: 'pcs' }],
+      },
+    ];
+    const [first, second] = await Promise.all(
+      updates.map((payload) =>
+        request(app.getHttpServer())
+          .patch(`/api/inquiries/${created.body.id as string}`)
+          .set(bearer(salesToken))
+          .send(payload),
+      ),
+    );
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    const winner = first.status === 200 ? first : second;
+    expect(winner.body.source_version).toBe(2);
+    expect(winner.body.items).toHaveLength(winner.body.customer_code.endsWith('A') ? 2 : 1);
+    const updateAudit = await withAdmin(async (client) => {
+      const result = await client.query<{
+        before_json: { source_version: number };
+        after_json: { source_version: number };
+      }>(
+        `SELECT before_json, after_json
+           FROM audit_logs
+          WHERE tenant_id = $1 AND action = 'inquiry.updated' AND resource_id = $2`,
+        [TEST_TENANT_ID, created.body.id],
+      );
+      return result.rows;
+    });
+    expect(updateAudit).toHaveLength(1);
+    expect(updateAudit[0].before_json.source_version).toBe(1);
+    expect(updateAudit[0].after_json.source_version).toBe(2);
+
+    const invalid = await request(app.getHttpServer())
+      .patch(`/api/inquiries/${created.body.id as string}`)
+      .set(bearer(salesToken))
+      .send({
+        ...updates[0],
+        expected_version: 2,
+        items: [{ ...updates[0].items[0], quantity: '0' }],
+      });
+    expect(invalid.status).toBe(400);
+
+    const procurementDenied = await request(app.getHttpServer())
+      .patch(`/api/inquiries/${created.body.id as string}`)
+      .set(bearer(procurementToken))
+      .send({ ...updates[0], expected_version: 2 });
+    expect(procurementDenied.status).toBe(403);
+
+    const crossTenant = await request(app.getHttpServer())
+      .patch(`/api/inquiries/${created.body.id as string}`)
+      .set(bearer(tenant2Token))
+      .send({ ...updates[0], expected_version: 2 });
+    expect(crossTenant.status).toBe(404);
+
+    const staleSubmit = await request(app.getHttpServer())
+      .post(`/api/inquiries/${created.body.id as string}/submit`)
+      .set(bearer(salesToken))
+      .send({ expected_version: 1 });
+    expect(staleSubmit.status).toBe(409);
+
+    const submitted = await request(app.getHttpServer())
+      .post(`/api/inquiries/${created.body.id as string}/submit`)
+      .set(bearer(salesToken))
+      .send({ expected_version: 2 });
+    expect(submitted.status).toBe(201);
+    expect(submitted.body.inquiry.status).toBe('submitted');
+  });
+
   it('persists a multi-line inquiry with exact decimal strings and submits atomically', async () => {
     const created = await request(app.getHttpServer())
       .post('/api/inquiries')
@@ -259,7 +355,8 @@ describe('Stage 2A inquiry and quotation workflow (integration)', () => {
 
     const submitted = await request(app.getHttpServer())
       .post(`/api/inquiries/${inquiryId}/submit`)
-      .set(bearer(salesToken));
+      .set(bearer(salesToken))
+      .send({ expected_version: 1 });
     expect(submitted.status).toBe(201);
     expect(submitted.body.inquiry.status).toBe('submitted');
     expect(submitted.body.quote_task.sanitization_status).toBe('pending');
@@ -316,10 +413,28 @@ describe('Stage 2A inquiry and quotation workflow (integration)', () => {
     expect(rateLimited.body.sanitization_status).toBe('rate_limited');
     provider.mode = 'success';
     const retried = await request(app.getHttpServer())
-      .post(`/api/inquiries/${limited.inquiryId}/sanitize`)
-      .set(bearer(salesToken));
+      .post(`/api/quote-tasks/${limited.taskId}/retry`)
+      .set(bearer(procurementToken));
     expect(retried.body.sanitization_status).toBe('ready');
     expect(retried.body.attempt_count).toBe(2);
+    const duplicateRetry = await request(app.getHttpServer())
+      .post(`/api/quote-tasks/${limited.taskId}/retry`)
+      .set(bearer(procurementToken));
+    expect(duplicateRetry.status).toBe(201);
+    expect(duplicateRetry.body.sanitization_status).toBe('ready');
+    expect(duplicateRetry.body.attempt_count).toBe(2);
+    const retryAudits = await withAdmin(async (client) => {
+      const result = await client.query<{
+        after_json: { attempt: number; previous_status: string };
+      }>(
+        `SELECT after_json
+           FROM audit_logs
+          WHERE tenant_id = $1 AND action = 'quote_task.retry_started' AND resource_id = $2`,
+        [TEST_TENANT_ID, limited.taskId],
+      );
+      return result.rows;
+    });
+    expect(retryAudits).toEqual([{ after_json: { attempt: 2, previous_status: 'rate_limited' } }]);
 
     const invalid = await createAndSubmitInquiry('INVALID');
     provider.mode = 'invalid';
