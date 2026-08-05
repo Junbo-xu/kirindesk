@@ -12,7 +12,7 @@ const ZERO_HASH = '0'.repeat(64);
 const SOURCE_DATABASE_NAME = 'kirindesk_test';
 const POSTGRES_IMAGE = 'postgres:16.10-alpine';
 const BASELINE_MIGRATION = '049_stage_2e_finance_profit_commission.sql';
-const RELEASE_MIGRATION = '050_stage_2f_samples_after_sales.sql';
+const RELEASE_MIGRATION = '051_kir_21_p0_web_remediation.sql';
 const BASELINE_SOURCE_FILTERS: Record<string, string> = {
   finance_review_items: `subject_type <> 'after_sales_adjustment'`,
 };

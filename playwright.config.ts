@@ -39,7 +39,7 @@ export default defineConfig({
         TENANT_JWT_SECRET: 'test-tenant-jwt-secret',
         PLATFORM_JWT_SECRET: 'test-platform-jwt-secret',
         REDIS_URL: process.env.REDIS_URL ?? 'redis://127.0.0.1:6379/1',
-        LOGIN_RATE_LIMIT_MAX: '100',
+        LOGIN_RATE_LIMIT_MAX: '1000',
         LOGIN_RATE_LIMIT_WINDOW_SEC: '900',
         TRUST_PROXY: 'true',
         S3_ENDPOINT: process.env.S3_ENDPOINT ?? 'http://127.0.0.1:9000',
@@ -53,7 +53,7 @@ export default defineConfig({
     },
     {
       command:
-        'pnpm --filter @kirindesk/web exec vite --config vite.config.ts --host 127.0.0.1 --port 4173',
+        'pnpm --filter @kirindesk/web build && pnpm --filter @kirindesk/web exec vite preview --config vite.config.ts --host 127.0.0.1 --port 4173 --strictPort',
       url: 'http://127.0.0.1:4173/login',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
