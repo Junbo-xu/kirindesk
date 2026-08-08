@@ -24,7 +24,7 @@ docker compose run --rm minio-init
 | --- | --- |
 | `pnpm verify:fast` | 所有活动 workspace 的 lint、格式、typecheck、build、unit test，以及 production dependency audit |
 | `pnpm test:integration` | 重建 `kirindesk_test`、执行全部迁移并运行 API 集成测试 |
-| `pnpm verify:migrations` | 在 `kirindesk_test` 回滚最近两份迁移，再按原校验和前滚恢复 |
+| `pnpm verify:migrations` | 在 `kirindesk_test` 回滚最近两份迁移并前滚恢复；另模拟已应用发布版 `051` 的旧环境升级到 `052`，校验历史 ledger 不变与自定义角色授权保留/回填 |
 | `pnpm test:security` | 启动失败策略、非超级用户运行、审计权限、RLS、会话和配额静态回归 |
 | `pnpm test:e2e` | Chromium、Firefox、WebKit 下的十二步业务、样品、售后、角色导航、租户/平台登录隔离回归 |
 | `pnpm verify:full` | 依次执行以上完整门禁 |
@@ -46,7 +46,7 @@ pnpm verify:release
 - 集成测试在任何写入前断言数据库名必须是 `kirindesk_test`。
 - 迁移往返演练拒绝任何非 `kirindesk_test` 数据库。
 - 发布数据演练同时拒绝非 loopback PostgreSQL 和非 `kirindesk_test` 数据库；运行时演练还要求管理库与应用库位于同一本地测试实例，并固定使用 Redis DB 1。
-- 影子库由正式 migrator 建立 `049` 基线，复制隔离测试库中所有可由该基线表达的真实事实，再实际前滚 `050`；不执行 DOWN、不修改源库，完整恢复库另行保留并对账全部 `050` 事实。
+- 影子库由正式 migrator 建立 `049` 基线，复制隔离测试库中所有可由该基线表达的真实事实，再实际前滚 `050`–`052`；不执行 DOWN、不修改源库，完整恢复库另行保留并对账全部候选事实。
 - 对象恢复演练拒绝非 loopback S3 端点，只写入随机 canary 和随机恢复 bucket，并在结束时清理。
 - Redis 清理拒绝 DB 0 和任何非 DB 1 地址。
 - API 运行时只读取 `APP_DATABASE_URL`，安全回归证明超级用户连接会导致启动失败。
