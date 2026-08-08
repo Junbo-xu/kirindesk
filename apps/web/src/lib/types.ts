@@ -1752,6 +1752,213 @@ export interface ExecuteAfterSalesInput {
   proof_file_id?: string;
 }
 
+export type TradeDocumentType = 'quote' | 'pi' | 'sc' | 'ci' | 'pl';
+export type TradeDocumentLanguage = 'zh' | 'en' | 'ru' | 'es' | 'de' | 'ar';
+
+export interface ProductRecord {
+  id: string;
+  owner_user_id: string;
+  sku: string;
+  name: string;
+  description: string | null;
+  unit: string;
+  hs_code: string | null;
+  default_currency: string;
+  default_unit_price: string;
+  cost_unit_price?: string | null;
+  weight_kg: string | null;
+  volume_cbm: string | null;
+  thumbnail_file_id: string | null;
+  custom_values: Record<string, unknown>;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductInput {
+  sku: string;
+  name: string;
+  description?: string;
+  unit: string;
+  hs_code?: string;
+  default_currency: string;
+  default_unit_price: string;
+  cost_unit_price?: string;
+  weight_kg?: string;
+  volume_cbm?: string;
+  thumbnail_file_id?: string;
+  custom_values?: Record<string, unknown>;
+}
+
+export interface ProductFieldRecord {
+  id?: string;
+  field_key: string;
+  label: string;
+  data_type: 'text' | 'number' | 'boolean' | 'date';
+  active: boolean;
+  sort_order: number;
+  document_types: TradeDocumentType[];
+  system: boolean;
+  deletable: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ProductFieldsResponse {
+  system: ProductFieldRecord[];
+  custom: ProductFieldRecord[];
+}
+
+export interface TradeDocumentLineInput {
+  product_id?: string;
+  sku: string;
+  name: string;
+  description?: string;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+  cost_unit_price?: string;
+  weight_kg?: string;
+  volume_cbm?: string;
+  package_no?: string;
+  thumbnail_file_id?: string;
+  custom_values?: Record<string, unknown>;
+}
+
+export interface TradeDocumentInput {
+  customer_id?: string;
+  sales_order_id?: string;
+  quote_number: string;
+  pricing_mode?: 'final_price' | 'cost_profit';
+  language?: TradeDocumentLanguage;
+  incoterm?: 'FOB' | 'CIF' | 'EXW';
+  pricing_currency: string;
+  settlement_currency: string;
+  exchange_rate: string;
+  discount_type?: 'none' | 'percent' | 'amount';
+  discount_value?: string;
+  freight_amount?: string;
+  insurance_amount?: string;
+  tax_amount?: string;
+  internal_expenses?: string;
+  allocation_method?: 'equal' | 'value' | 'weight' | 'volume';
+  packing_mode?: 'normal' | 'combined';
+  theme_color?: string;
+  visible_fields?: Record<string, boolean>;
+  terms?: string;
+  bank_info?: string;
+  logo_file_id?: string;
+  signature_file_id?: string;
+  lines: TradeDocumentLineInput[];
+}
+
+export type TradeDocumentLine = Omit<
+  TradeDocumentLineInput,
+  | 'description'
+  | 'cost_unit_price'
+  | 'weight_kg'
+  | 'volume_cbm'
+  | 'package_no'
+  | 'thumbnail_file_id'
+> & {
+  id: string;
+  line_no: number;
+  description: string | null;
+  line_total: string;
+  allocated_charges: string;
+  cost_unit_price?: string | null;
+  cost_total?: string | null;
+  weight_kg: string | null;
+  volume_cbm: string | null;
+  total_weight_kg: string | null;
+  total_volume_cbm: string | null;
+  package_no: string | null;
+  thumbnail_file_id: string | null;
+  custom_fields: Array<{
+    field_key: string;
+    label: string;
+    value: unknown;
+    document_types: TradeDocumentType[];
+  }>;
+};
+
+export interface TradeDocumentSet {
+  document_set_id: string;
+  sales_order_id?: string | null;
+  source_version: number;
+  quote_number: string;
+  pricing_mode?: 'final_price' | 'cost_profit';
+  status: 'draft' | 'locked';
+  language: TradeDocumentLanguage;
+  incoterm: 'FOB' | 'CIF' | 'EXW';
+  pricing_currency: string;
+  settlement_currency: string;
+  exchange_rate: string;
+  discount_type: 'none' | 'percent' | 'amount';
+  discount_value: string;
+  allocation_method: 'equal' | 'value' | 'weight' | 'volume';
+  packing_mode: 'normal' | 'combined';
+  template_key: 'fixed_default';
+  theme_color: string;
+  visible_fields: Record<string, boolean>;
+  terms: string | null;
+  bank_info: string | null;
+  logo_file_id: string | null;
+  signature_file_id: string | null;
+  customer: CustomerResponse | null;
+  lines: TradeDocumentLine[];
+  totals: {
+    subtotal: string;
+    discount_amount: string;
+    freight_amount: string;
+    insurance_amount: string;
+    tax_amount: string;
+    grand_total: string;
+    settlement_total: string;
+    total_weight_kg: string;
+    total_volume_cbm: string;
+  };
+  internal_expenses?: string;
+  internal_totals?: {
+    cost_total: string;
+    internal_expenses: string;
+    gross_profit: string;
+    gross_margin_bps: number | null;
+  };
+  generated_at: string;
+}
+
+export interface TradeDocumentExport {
+  id: string;
+  document_set_id: string;
+  source_version: number;
+  export_version: number;
+  document_type: TradeDocumentType;
+  file_id: string;
+  is_draft: boolean;
+  created_by: string;
+  created_at: string;
+}
+
+export interface TradeDocumentLink {
+  id: string;
+  export_id: string;
+  document_type: TradeDocumentType;
+  source_version: number;
+  export_version: number;
+  revoked_at: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  events: { opened: number; downloaded: number; confirmed: number };
+}
+
+export interface PublicTradeDocument {
+  document_type: TradeDocumentType;
+  document: TradeDocumentSet;
+  confirmed_at: string | null;
+  download_path: string;
+}
+
 // Normalized API error thrown by the client for non-2xx responses.
 export class ApiError extends Error {
   status: number;

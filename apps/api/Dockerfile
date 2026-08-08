@@ -38,7 +38,9 @@ FROM node:22-alpine AS runtime
 ARG KIRINDESK_BUILD_COMMIT
 LABEL org.opencontainers.image.revision=$KIRINDESK_BUILD_COMMIT
 ENV NODE_ENV=production
+ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 WORKDIR /app
+RUN apk add --no-cache chromium font-noto font-noto-cjk
 # pnpm deploy emits node_modules + package.json; bring in the compiled dist too.
 COPY --from=deploy /prod/api/node_modules ./node_modules
 COPY --from=deploy /prod/api/package.json ./package.json
