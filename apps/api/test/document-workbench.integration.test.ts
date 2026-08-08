@@ -97,7 +97,7 @@ describe('foreign trade document workbench (integration)', () => {
                ('products:view', 'assigned'),
                ('products:manage', 'assigned'),
                ('document_sets:view', 'all'),
-               ('document_sets:manage', 'assigned'),
+               ('document_sets:manage', 'all'),
                ('document_financials:view', 'assigned'),
                ('audit_logs:view', 'all')
            ) AS grant_spec(code, data_scope)
@@ -169,6 +169,52 @@ describe('foreign trade document workbench (integration)', () => {
           package_no: 'BOX-1',
         },
       ],
+    };
+  }
+
+  function updatePayloadFromDocument(document: Record<string, any>) {
+    return {
+      customer_id: document.customer?.id,
+      sales_order_id: document.sales_order_id ?? undefined,
+      quote_number: document.quote_number,
+      pricing_mode: document.pricing_mode ?? 'final_price',
+      language: document.language,
+      incoterm: document.incoterm,
+      pricing_currency: document.pricing_currency,
+      settlement_currency: document.settlement_currency,
+      exchange_rate: document.exchange_rate,
+      discount_type: document.discount_type,
+      discount_value: document.discount_value,
+      freight_amount: document.totals.freight_amount,
+      insurance_amount: document.totals.insurance_amount,
+      tax_amount: document.totals.tax_amount,
+      internal_expenses: document.internal_expenses ?? '0',
+      allocation_method: document.allocation_method,
+      packing_mode: document.packing_mode,
+      theme_color: document.theme_color,
+      visible_fields: document.visible_fields,
+      terms: document.terms ?? undefined,
+      bank_info: document.bank_info ?? undefined,
+      logo_file_id: document.logo_file_id ?? undefined,
+      signature_file_id: document.signature_file_id ?? undefined,
+      lines: document.lines.map((line: Record<string, any>) => ({
+        id: line.id,
+        sku: line.sku,
+        name: line.name,
+        description: line.description ?? undefined,
+        quantity: line.quantity,
+        unit: line.unit,
+        unit_price: line.unit_price,
+        cost_unit_price: line.cost_unit_price ?? undefined,
+        weight_kg: line.weight_kg ?? undefined,
+        volume_cbm: line.volume_cbm ?? undefined,
+        package_no: line.package_no ?? undefined,
+        thumbnail_file_id: line.thumbnail_file_id ?? undefined,
+        custom_values: Object.fromEntries(
+          line.custom_fields.map((field: Record<string, any>) => [field.field_key, field.value]),
+        ),
+      })),
+      expected_version: document.source_version,
     };
   }
 
@@ -354,6 +400,74 @@ describe('foreign trade document workbench (integration)', () => {
     expect(JSON.stringify(response.body)).not.toContain('7.8900');
   });
 
+  it('preserves hidden financial values when manage=all updates another owner document', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({ ...documentPayload(), quote_number: 'QT-FINANCIAL-SCOPE' });
+    expect(created.status).toBe(201);
+
+    const visible = await request(app.getHttpServer())
+      .get(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(viewerToken));
+    expect(visible.status).toBe(200);
+    expect(visible.body.internal_expenses).toBeUndefined();
+    expect(visible.body.lines[0].cost_unit_price).toBeUndefined();
+
+    const updated = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(viewerToken))
+      .send({ ...updatePayloadFromDocument(visible.body), terms: 'Public terms updated' });
+    expect(updated.status).toBe(200);
+    expect(updated.body.terms).toBe('Public terms updated');
+    expect(updated.body.internal_expenses).toBeUndefined();
+
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      const stored = await admin.query<{
+        pricing_mode: string;
+        internal_expenses: string;
+        cost_unit_price: string | null;
+      }>(
+        `SELECT document.pricing_mode, document.internal_expenses::text,
+                line.cost_unit_price::text
+           FROM trade_document_sets document
+           JOIN trade_document_lines line ON line.document_set_id = document.id
+          WHERE document.id = $1`,
+        [created.body.document_set_id],
+      );
+      expect(stored.rows[0]).toEqual({
+        pricing_mode: 'cost_profit',
+        internal_expenses: '3.00',
+        cost_unit_price: '7.8900',
+      });
+    } finally {
+      await admin.end();
+    }
+
+    const rejected = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(viewerToken))
+      .send({
+        ...updatePayloadFromDocument({ ...visible.body, source_version: 2 }),
+        pricing_mode: 'cost_profit',
+        internal_expenses: '9.00',
+      });
+    expect(rejected.status).toBe(400);
+
+    const missingLineIdentity = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(viewerToken))
+      .send({
+        ...updatePayloadFromDocument({ ...visible.body, source_version: 2 }),
+        lines: updatePayloadFromDocument({ ...visible.body, source_version: 2 }).lines.map(
+          ({ id: _id, ...line }: { id?: string; [key: string]: unknown }) => line,
+        ),
+      });
+    expect(missingLineIdentity.status).toBe(400);
+  });
+
   it('intersects document scope with assigned financial scope per owner', async () => {
     const salesDenied = await request(app.getHttpServer())
       .get(`/api/document-sets/${documentId}`)
@@ -368,6 +482,21 @@ describe('foreign trade document workbench (integration)', () => {
     expect(ownDocument.body.internal_totals.cost_total).toBe('789.00');
     expect(ownDocument.body.lines[0].cost_unit_price).toBe('7.8900');
 
+    const ownUpdated = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${ownDocument.body.document_set_id}`)
+      .set(bearer(viewerToken))
+      .send({
+        ...updatePayloadFromDocument(ownDocument.body),
+        lines: [
+          {
+            ...updatePayloadFromDocument(ownDocument.body).lines[0],
+            cost_unit_price: '8.0000',
+          },
+        ],
+      });
+    expect(ownUpdated.status).toBe(200);
+    expect(ownUpdated.body.lines[0].cost_unit_price).toBe('8.0000');
+
     const list = await request(app.getHttpServer())
       .get('/api/document-sets?pageSize=100')
       .set(bearer(viewerToken));
@@ -380,13 +509,13 @@ describe('foreign trade document workbench (integration)', () => {
         document.document_set_id === ownDocument.body.document_set_id,
     );
     expect(other.internal_totals).toBeUndefined();
-    expect(own.internal_totals.cost_total).toBe('789.00');
+    expect(own.internal_totals.cost_total).toBe('800.00');
 
-    const deniedUpdate = await request(app.getHttpServer())
+    const deniedFinancialUpdate = await request(app.getHttpServer())
       .patch(`/api/document-sets/${documentId}`)
       .set(bearer(viewerToken))
       .send({ ...documentPayload(), quote_number: 'QT-FORBIDDEN', expected_version: 1 });
-    expect(deniedUpdate.status).toBe(404);
+    expect(deniedFinancialUpdate.status).toBe(400);
   });
 
   it('enforces cross-tenant RLS on document ids', async () => {

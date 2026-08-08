@@ -1810,6 +1810,7 @@ export interface ProductFieldsResponse {
 }
 
 export interface TradeDocumentLineInput {
+  id?: string;
   product_id?: string;
   sku: string;
   name: string;

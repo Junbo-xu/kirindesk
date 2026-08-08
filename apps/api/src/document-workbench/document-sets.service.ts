@@ -460,16 +460,18 @@ export class DocumentSetsService {
     actor: DocumentWorkbenchActor,
     documentSetId: string,
     dto: CreateDocumentSetDto | UpdateDocumentSetDto,
+    preserveLineIds = false,
   ): Promise<void> {
     const money = this.money(dto);
     for (const [index, line] of dto.lines.entries()) {
       await client.query(
         `INSERT INTO trade_document_lines
-           (tenant_id, document_set_id, product_id, line_no, sku, name, description,
+           (id, tenant_id, document_set_id, product_id, line_no, sku, name, description,
             quantity, unit, unit_price, line_total, cost_unit_price, cost_total,
             weight_kg, volume_cbm, package_no, thumbnail_file_id, custom_values)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
         [
+          preserveLineIds && line.id ? line.id : randomUUID(),
           actor.tenantId,
           documentSetId,
           line.product_id ?? null,
@@ -491,6 +493,45 @@ export class DocumentSetsService {
         ],
       );
     }
+  }
+
+  private prepareUpdateInput(
+    dto: UpdateDocumentSetDto,
+    beforeRow: DocumentSetRow,
+    beforeLines: DocumentLineRow[],
+    includeFinancials: boolean,
+  ): UpdateDocumentSetDto {
+    const beforeById = new Map(beforeLines.map((line) => [line.id, line]));
+    const requestedIds = dto.lines.flatMap((line) => (line.id ? [line.id] : []));
+    if (new Set(requestedIds).size !== requestedIds.length) {
+      throw new InvalidDocumentWorkbenchDataException('Document line ids must be unique');
+    }
+    if (requestedIds.some((lineId) => !beforeById.has(lineId))) {
+      throw new InvalidDocumentWorkbenchDataException(
+        'Document line ids must belong to the document set',
+      );
+    }
+    if (includeFinancials) return dto;
+
+    const requestedIdSet = new Set(requestedIds);
+    if (beforeLines.some((line) => line.cost_unit_price !== null && !requestedIdSet.has(line.id))) {
+      throw new InvalidDocumentWorkbenchDataException(
+        'Financial permission is required to replace or remove costed document lines',
+        'DOCUMENT_FINANCIAL_PERMISSION_REQUIRED',
+      );
+    }
+
+    return {
+      ...dto,
+      pricing_mode: beforeRow.pricing_mode,
+      internal_expenses: beforeRow.internal_expenses,
+      lines: dto.lines.map((line) => ({
+        ...line,
+        ...(line.id
+          ? { cost_unit_price: beforeById.get(line.id)?.cost_unit_price ?? undefined }
+          : { cost_unit_price: undefined }),
+      })),
+    };
   }
 
   async create(actor: DocumentWorkbenchActor, dto: CreateDocumentSetDto) {
@@ -663,6 +704,13 @@ export class DocumentSetsService {
             );
           }
           await this.verifyReferences(client, actor, dto);
+          const beforeLines = await this.lines(client, id);
+          const updateInput = this.prepareUpdateInput(
+            dto,
+            beforeRow,
+            beforeLines,
+            includeFinancials,
+          );
           const before = await this.snapshot(client, beforeRow);
           const updated = await client.query<DocumentSetRow>(
             `UPDATE trade_document_sets SET
@@ -676,29 +724,29 @@ export class DocumentSetsService {
              WHERE id=$24 AND version=$25
              RETURNING ${SET_COLUMNS}`,
             [
-              dto.customer_id ?? null,
-              dto.sales_order_id ?? null,
-              dto.quote_number,
-              dto.pricing_mode ?? 'final_price',
-              dto.language ?? 'en',
-              dto.incoterm ?? 'FOB',
-              dto.pricing_currency,
-              dto.settlement_currency,
-              dto.exchange_rate,
-              dto.discount_type ?? 'none',
-              dto.discount_value ?? '0',
-              dto.freight_amount ?? '0',
-              dto.insurance_amount ?? '0',
-              dto.tax_amount ?? '0',
-              dto.internal_expenses ?? '0',
-              dto.allocation_method ?? 'value',
-              dto.packing_mode ?? 'normal',
-              dto.theme_color ?? '#155EEF',
-              JSON.stringify(dto.visible_fields ?? {}),
-              dto.terms?.trim() || null,
-              dto.bank_info?.trim() || null,
-              dto.logo_file_id ?? null,
-              dto.signature_file_id ?? null,
+              updateInput.customer_id ?? null,
+              updateInput.sales_order_id ?? null,
+              updateInput.quote_number,
+              updateInput.pricing_mode ?? 'final_price',
+              updateInput.language ?? 'en',
+              updateInput.incoterm ?? 'FOB',
+              updateInput.pricing_currency,
+              updateInput.settlement_currency,
+              updateInput.exchange_rate,
+              updateInput.discount_type ?? 'none',
+              updateInput.discount_value ?? '0',
+              updateInput.freight_amount ?? '0',
+              updateInput.insurance_amount ?? '0',
+              updateInput.tax_amount ?? '0',
+              updateInput.internal_expenses ?? '0',
+              updateInput.allocation_method ?? 'value',
+              updateInput.packing_mode ?? 'normal',
+              updateInput.theme_color ?? '#155EEF',
+              JSON.stringify(updateInput.visible_fields ?? {}),
+              updateInput.terms?.trim() || null,
+              updateInput.bank_info?.trim() || null,
+              updateInput.logo_file_id ?? null,
+              updateInput.signature_file_id ?? null,
               id,
               dto.expected_version,
             ],
@@ -710,7 +758,7 @@ export class DocumentSetsService {
             );
           }
           await client.query(`DELETE FROM trade_document_lines WHERE document_set_id = $1`, [id]);
-          await this.insertLines(client, actor, id, dto);
+          await this.insertLines(client, actor, id, updateInput, true);
           const after = await this.snapshot(client, updated.rows[0]);
           await this.audit.logInTransaction(client, {
             tenantId: actor.tenantId,

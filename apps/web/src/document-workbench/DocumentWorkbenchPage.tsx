@@ -87,6 +87,7 @@ function inputFromDocument(document: TradeDocumentSet): TradeDocumentInput {
     logo_file_id: document.logo_file_id ?? undefined,
     signature_file_id: document.signature_file_id ?? undefined,
     lines: document.lines.map((line) => ({
+      id: line.id,
       sku: line.sku,
       name: line.name,
       description: line.description ?? undefined,

@@ -28,6 +28,10 @@ const VOLUME = /^\d{1,12}(\.\d{1,6})?$/;
 export class DocumentLineInputDto {
   @IsOptional()
   @IsUUID()
+  id?: string;
+
+  @IsOptional()
+  @IsUUID()
   product_id?: string;
 
   @Transform(trim)
