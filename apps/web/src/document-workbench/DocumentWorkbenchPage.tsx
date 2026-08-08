@@ -910,8 +910,8 @@ export function DocumentWorkbenchPage() {
                   }
                   style={{ width: '100%' }}
                 >
-                  <option value="normal">普通装箱</option>
-                  <option value="combined">合并装箱</option>
+                  <option value="normal">普通装箱（每行一箱）</option>
+                  <option value="combined">合并装箱（按箱号汇总）</option>
                 </select>
               </label>
               <label>

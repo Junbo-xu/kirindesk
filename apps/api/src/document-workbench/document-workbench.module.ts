@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { AuthModule } from '../auth/auth.module';
+import { FilesModule } from '../files/files.module';
 import { RbacModule } from '../rbac/rbac.module';
 import { SubscriptionModule } from '../subscription/subscription.module';
 import {
@@ -14,7 +15,7 @@ import { ProductFieldsController, ProductsController } from './products.controll
 import { ProductsService } from './products.service';
 
 @Module({
-  imports: [AuthModule, RbacModule, AuditModule, SubscriptionModule],
+  imports: [AuthModule, RbacModule, AuditModule, FilesModule, SubscriptionModule],
   controllers: [
     PublicDocumentsController,
     ProductsController,

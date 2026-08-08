@@ -197,6 +197,29 @@ export class FilesService {
     return rows[0];
   }
 
+  async findManyInScope(
+    client: PoolClient,
+    actor: RequestActor,
+    ids: string[],
+  ): Promise<FileRow[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+    const params: unknown[] = [uniqueIds];
+    let scopeClause = '';
+    if (this.restrictsToOwner(actor.dataScope)) {
+      params.push(actor.userId);
+      scopeClause = ` AND uploaded_by = $${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scopeClause = ' AND false';
+    }
+    const { rows } = await client.query<FileRow>(
+      `SELECT * FROM files
+        WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL${scopeClause}`,
+      params,
+    );
+    return rows;
+  }
+
   async getOne(actor: RequestActor, id: string): Promise<FileResponse> {
     const row = await withTenantContext(
       this.pool,

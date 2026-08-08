@@ -1907,6 +1907,12 @@ export interface TradeDocumentSet {
   signature_file_id: string | null;
   customer: CustomerResponse | null;
   lines: TradeDocumentLine[];
+  packages: Array<{
+    package_no: string;
+    line_nos: number[];
+    total_weight_kg: string;
+    total_volume_cbm: string;
+  }>;
   totals: {
     subtotal: string;
     discount_amount: string;

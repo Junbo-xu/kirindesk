@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import puppeteer from 'puppeteer-core';
+import { buildDocumentPackages } from './document-packing';
 import { DocumentRenderAssets, DocumentType, PublicDocumentSnapshot } from './document.types';
 
 export const DOCUMENT_PDF_RENDERER = Symbol('DOCUMENT_PDF_RENDERER');
@@ -231,7 +232,7 @@ export function renderDocumentHtml(
     }
   }
   const customColumns = [...customFields.entries()];
-  const rows = snapshot.lines
+  const itemRows = snapshot.lines
     .map((line) => {
       const custom = new Map(line.custom_fields.map((field) => [field.field_key, field.value]));
       const thumbnail = line.thumbnail_file_id
@@ -240,6 +241,25 @@ export function renderDocumentHtml(
       return `<tr><td>${line.line_no}</td>${visible(snapshot, 'thumbnail') ? `<td>${thumbnail ? `<img class="thumb" src="${escapeHtml(thumbnail)}">` : ''}</td>` : ''}<td>${escapeHtml(line.sku)}</td><td><strong>${escapeHtml(line.name)}</strong>${line.description ? `<br><span class="muted">${escapeHtml(line.description)}</span>` : ''}</td><td>${escapeHtml(line.quantity)}</td><td>${escapeHtml(line.unit)}</td>${packingList ? `<td>${escapeHtml(line.package_no || '-')}</td><td>${escapeHtml(line.total_weight_kg || '0.0000')}</td><td>${escapeHtml(line.total_volume_cbm || '0.000000')}</td>` : `<td>${escapeHtml(snapshot.pricing_currency)} ${escapeHtml(line.unit_price)}</td><td>${escapeHtml(snapshot.pricing_currency)} ${escapeHtml(line.line_total)}</td>`}${customColumns.map(([key]) => `<td>${escapeHtml(custom.get(key) ?? '')}</td>`).join('')}</tr>`;
     })
     .join('');
+  const lineByNumber = new Map(snapshot.lines.map((line) => [line.line_no, line]));
+  const packages =
+    snapshot.packages ?? buildDocumentPackages(snapshot.lines, snapshot.packing_mode);
+  const packingRows = packages
+    .map((documentPackage, packageIndex) => {
+      const packageLines = documentPackage.line_nos
+        .map((lineNumber) => lineByNumber.get(lineNumber))
+        .filter((line): line is PublicDocumentSnapshot['lines'][number] => Boolean(line));
+      const values = (value: (line: PublicDocumentSnapshot['lines'][number]) => unknown) =>
+        packageLines.map((line) => escapeHtml(value(line))).join('<br>');
+      const thumbnails = packageLines
+        .map((line) => (line.thumbnail_file_id ? assets.thumbnails[line.thumbnail_file_id] : null))
+        .filter((thumbnail): thumbnail is string => Boolean(thumbnail))
+        .map((thumbnail) => `<img class="thumb" src="${escapeHtml(thumbnail)}">`)
+        .join('');
+      return `<tr><td>${packageIndex + 1}</td>${visible(snapshot, 'thumbnail') ? `<td>${thumbnails}</td>` : ''}<td>${values((line) => line.sku)}</td><td>${values((line) => `${line.name}${line.description ? ` — ${line.description}` : ''}`)}</td><td>${values((line) => line.quantity)}</td><td>${values((line) => line.unit)}</td><td>${escapeHtml(documentPackage.package_no)}</td><td>${escapeHtml(documentPackage.total_weight_kg)}</td><td>${escapeHtml(documentPackage.total_volume_cbm)}</td>${customColumns.map(([key]) => `<td>${values((line) => line.custom_fields.find((field) => field.field_key === key)?.value ?? '')}</td>`).join('')}</tr>`;
+    })
+    .join('');
+  const rows = packingList ? packingRows : itemRows;
   const financialRows = packingList
     ? `<tr><th>${escapeHtml(labels.total)}</th><td>${escapeHtml(snapshot.totals.total_weight_kg)}</td><td>${escapeHtml(snapshot.totals.total_volume_cbm)}</td></tr>`
     : [

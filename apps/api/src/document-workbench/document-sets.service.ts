@@ -5,6 +5,7 @@ import type { Pool, PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import { APP_POOL } from '../database/database.module';
 import { withTenantContext } from '../database/context';
+import { FilesService } from '../files/files.service';
 import { RbacService } from '../rbac/rbac.service';
 import { STORAGE_PROVIDER, StorageProvider } from '../storage/storage-provider.interface';
 import { QuotaService } from '../subscription/quota.service';
@@ -14,6 +15,7 @@ import {
   InvalidDocumentWorkbenchDataException,
 } from './document-workbench.errors';
 import { computeDocumentMoney } from './document-money';
+import { buildDocumentPackages } from './document-packing';
 import { DOCUMENT_PDF_RENDERER, DocumentPdfRenderer } from './document-pdf.renderer';
 import {
   DOCUMENT_TYPES,
@@ -141,6 +143,7 @@ export class DocumentSetsService {
     @Inject(DOCUMENT_PDF_RENDERER) private readonly pdfRenderer: DocumentPdfRenderer,
     private readonly audit: AuditService,
     private readonly rbac: RbacService,
+    private readonly files: FilesService,
     private readonly quota: QuotaService,
   ) {}
 
@@ -148,10 +151,36 @@ export class DocumentSetsService {
     return dataScope === 'own' || dataScope === 'assigned';
   }
 
-  private async canViewFinancials(actor: DocumentWorkbenchActor): Promise<boolean> {
-    return (
-      await this.rbac.checkPermission(actor.userId, actor.tenantId, 'document_financials:view')
-    ).allowed;
+  private scopeAllowsOwner(dataScope: string, actor: DocumentWorkbenchActor, ownerId: string) {
+    return dataScope === 'all' || (this.restrictsToOwner(dataScope) && ownerId === actor.userId);
+  }
+
+  private async financialScope(actor: DocumentWorkbenchActor): Promise<string> {
+    const permission = await this.rbac.checkPermission(
+      actor.userId,
+      actor.tenantId,
+      'document_financials:view',
+    );
+    return permission.allowed ? permission.dataScope : 'none';
+  }
+
+  private async fileScope(
+    actor: DocumentWorkbenchActor,
+    permissions: Array<'files:view' | 'files:download'>,
+  ): Promise<string> {
+    const grants = await Promise.all(
+      permissions.map((permission) =>
+        this.rbac.checkPermission(actor.userId, actor.tenantId, permission),
+      ),
+    );
+    if (grants.some((grant) => !grant.allowed)) return 'none';
+    if (grants.every((grant) => grant.dataScope === 'all')) return 'all';
+    if (
+      grants.every((grant) => grant.dataScope === 'all' || this.restrictsToOwner(grant.dataScope))
+    ) {
+      return 'own';
+    }
+    return 'none';
   }
 
   private validateFinancialInput(
@@ -227,13 +256,15 @@ export class DocumentSetsService {
       ...dto.lines.map((line) => line.thumbnail_file_id),
     ].filter((id): id is string => Boolean(id));
     if (fileIds.length > 0) {
-      const files = await client.query<{ id: string; mime_type: string }>(
-        `SELECT id, mime_type FROM files WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-        [fileIds],
+      const dataScope = await this.fileScope(actor, ['files:view']);
+      const files = await this.files.findManyInScope(
+        client,
+        { userId: actor.userId, tenantId: actor.tenantId, dataScope },
+        fileIds,
       );
       if (
-        files.rows.length !== new Set(fileIds).size ||
-        files.rows.some((file) => !file.mime_type.startsWith('image/'))
+        files.length !== new Set(fileIds).size ||
+        files.some((file) => !file.mime_type.startsWith('image/'))
       ) {
         throw new InvalidDocumentWorkbenchDataException(
           'Document images must reference visible image files',
@@ -265,6 +296,8 @@ export class DocumentSetsService {
     if (this.restrictsToOwner(actor.dataScope)) {
       params.push(actor.userId);
       scope = ` AND owner_user_id = $${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scope = ' AND false';
     }
     const result = await client.query<DocumentSetRow>(
       `SELECT ${SET_COLUMNS} FROM trade_document_sets
@@ -331,6 +364,36 @@ export class DocumentSetsService {
       exchange_rate: row.exchange_rate,
       allocation_method: row.allocation_method,
     });
+    const snapshotLines = lines.map((line, index) => ({
+      id: line.id,
+      line_no: line.line_no,
+      sku: line.sku,
+      name: line.name,
+      description: line.description,
+      quantity: line.quantity,
+      unit: line.unit,
+      unit_price: line.unit_price,
+      line_total: totals.lines[index].line_total,
+      cost_unit_price: line.cost_unit_price,
+      cost_total: totals.lines[index].cost_total,
+      allocated_charges: totals.lines[index].allocated_charges,
+      weight_kg: line.weight_kg,
+      volume_cbm: line.volume_cbm,
+      total_weight_kg: totals.lines[index].total_weight_kg,
+      total_volume_cbm: totals.lines[index].total_volume_cbm,
+      package_no: line.package_no,
+      thumbnail_file_id: line.thumbnail_file_id,
+      custom_fields: fields.rows
+        .filter((field) =>
+          Object.prototype.hasOwnProperty.call(line.custom_values, field.field_key),
+        )
+        .map((field) => ({
+          field_key: field.field_key,
+          label: field.label,
+          value: line.custom_values[field.field_key],
+          document_types: field.document_types,
+        })),
+    }));
     return {
       document_set_id: row.id,
       sales_order_id: row.sales_order_id,
@@ -355,36 +418,8 @@ export class DocumentSetsService {
       logo_file_id: row.logo_file_id,
       signature_file_id: row.signature_file_id,
       customer: customer.rows[0] ?? null,
-      lines: lines.map((line, index) => ({
-        id: line.id,
-        line_no: line.line_no,
-        sku: line.sku,
-        name: line.name,
-        description: line.description,
-        quantity: line.quantity,
-        unit: line.unit,
-        unit_price: line.unit_price,
-        line_total: totals.lines[index].line_total,
-        cost_unit_price: line.cost_unit_price,
-        cost_total: totals.lines[index].cost_total,
-        allocated_charges: totals.lines[index].allocated_charges,
-        weight_kg: line.weight_kg,
-        volume_cbm: line.volume_cbm,
-        total_weight_kg: totals.lines[index].total_weight_kg,
-        total_volume_cbm: totals.lines[index].total_volume_cbm,
-        package_no: line.package_no,
-        thumbnail_file_id: line.thumbnail_file_id,
-        custom_fields: fields.rows
-          .filter((field) =>
-            Object.prototype.hasOwnProperty.call(line.custom_values, field.field_key),
-          )
-          .map((field) => ({
-            field_key: field.field_key,
-            label: field.label,
-            value: line.custom_values[field.field_key],
-            document_types: field.document_types,
-          })),
-      })),
+      lines: snapshotLines,
+      packages: buildDocumentPackages(snapshotLines, row.packing_mode),
       totals: {
         subtotal: totals.subtotal,
         discount_amount: totals.discount_amount,
@@ -411,6 +446,13 @@ export class DocumentSetsService {
     return includeFinancials
       ? snapshot
       : { ...toPublicDocumentSnapshot(snapshot), sales_order_id: snapshot.sales_order_id };
+  }
+
+  private auditProjection(snapshot: InternalDocumentSnapshot) {
+    return {
+      ...toPublicDocumentSnapshot(snapshot),
+      sales_order_id: snapshot.sales_order_id,
+    };
   }
 
   private async insertLines(
@@ -452,7 +494,8 @@ export class DocumentSetsService {
   }
 
   async create(actor: DocumentWorkbenchActor, dto: CreateDocumentSetDto) {
-    const includeFinancials = await this.canViewFinancials(actor);
+    const financialScope = await this.financialScope(actor);
+    const includeFinancials = this.scopeAllowsOwner(financialScope, actor, actor.userId);
     this.validateFinancialInput(dto, includeFinancials);
     try {
       const snapshot = await withTenantContext(
@@ -507,7 +550,7 @@ export class DocumentSetsService {
             action: 'trade_document.created',
             resourceType: 'trade_document_set',
             resourceId: inserted.rows[0].id,
-            after: result,
+            after: this.auditProjection(result),
           });
           return result;
         },
@@ -527,7 +570,7 @@ export class DocumentSetsService {
   async list(actor: DocumentWorkbenchActor, query: ListDocumentSetsQuery) {
     const page = query.page ?? 1;
     const pageSize = query.pageSize ?? 20;
-    const includeFinancials = await this.canViewFinancials(actor);
+    const financialScope = await this.financialScope(actor);
     return withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
@@ -537,6 +580,8 @@ export class DocumentSetsService {
         if (this.restrictsToOwner(actor.dataScope)) {
           params.push(actor.userId);
           conditions.push(`owner_user_id = $${params.length}`);
+        } else if (actor.dataScope !== 'all') {
+          conditions.push('false');
         }
         if (query.status) {
           params.push(query.status);
@@ -558,37 +603,53 @@ export class DocumentSetsService {
           [...params, pageSize, (page - 1) * pageSize],
         );
         const data = [];
-        for (const row of rows.rows)
-          data.push(this.present(await this.snapshot(client, row), includeFinancials));
+        for (const row of rows.rows) {
+          data.push(
+            this.present(
+              await this.snapshot(client, row),
+              this.scopeAllowsOwner(financialScope, actor, row.owner_user_id),
+            ),
+          );
+        }
         return { data, page, pageSize, total: Number(count.rows[0].count) };
       },
     );
   }
 
   async get(actor: DocumentWorkbenchActor, id: string) {
-    const includeFinancials = await this.canViewFinancials(actor);
-    const snapshot = await withTenantContext(
+    const financialScope = await this.financialScope(actor);
+    const result = await withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const row = await this.setRow(client, actor, id);
-        return row.status === 'locked' && row.locked_snapshot
-          ? row.locked_snapshot
-          : this.snapshot(client, row);
+        const snapshot =
+          row.status === 'locked' && row.locked_snapshot
+            ? row.locked_snapshot
+            : await this.snapshot(client, row);
+        return { snapshot, ownerId: row.owner_user_id };
       },
     );
-    return this.present(snapshot, includeFinancials);
+    return this.present(
+      result.snapshot,
+      this.scopeAllowsOwner(financialScope, actor, result.ownerId),
+    );
   }
 
   async update(actor: DocumentWorkbenchActor, id: string, dto: UpdateDocumentSetDto) {
-    const includeFinancials = await this.canViewFinancials(actor);
-    this.validateFinancialInput(dto, includeFinancials);
+    const financialScope = await this.financialScope(actor);
     try {
-      const snapshot = await withTenantContext(
+      const result = await withTenantContext(
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
           const beforeRow = await this.setRow(client, actor, id, true);
+          const includeFinancials = this.scopeAllowsOwner(
+            financialScope,
+            actor,
+            beforeRow.owner_user_id,
+          );
+          this.validateFinancialInput(dto, includeFinancials);
           if (beforeRow.status === 'locked') {
             throw new DocumentWorkbenchConflictException(
               'Locked document sets are immutable',
@@ -658,13 +719,16 @@ export class DocumentSetsService {
             action: 'trade_document.updated',
             resourceType: 'trade_document_set',
             resourceId: id,
-            before,
-            after,
+            before: this.auditProjection(before),
+            after: this.auditProjection(after),
           });
-          return after;
+          return { snapshot: after, ownerId: beforeRow.owner_user_id };
         },
       );
-      return this.present(snapshot, includeFinancials);
+      return this.present(
+        result.snapshot,
+        this.scopeAllowsOwner(financialScope, actor, result.ownerId),
+      );
     } catch (error) {
       if ((error as { constraint?: string }).constraint === 'uq_trade_document_sets_number') {
         throw new DocumentWorkbenchConflictException(
@@ -677,7 +741,7 @@ export class DocumentSetsService {
   }
 
   async lock(actor: DocumentWorkbenchActor, id: string) {
-    const includeFinancials = await this.canViewFinancials(actor);
+    const financialScope = await this.financialScope(actor);
     const result = await withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
@@ -686,7 +750,7 @@ export class DocumentSetsService {
         if (row.status === 'locked') {
           if (!row.locked_snapshot)
             throw new DocumentWorkbenchConflictException('Locked snapshot is missing');
-          return row.locked_snapshot;
+          return { snapshot: row.locked_snapshot, ownerId: row.owner_user_id };
         }
         const lockedAt = new Date();
         const snapshot = await this.snapshot(client, { ...row, status: 'locked' }, lockedAt);
@@ -703,12 +767,15 @@ export class DocumentSetsService {
           action: 'trade_document.locked',
           resourceType: 'trade_document_set',
           resourceId: id,
-          after: snapshot,
+          after: this.auditProjection(snapshot),
         });
-        return snapshot;
+        return { snapshot, ownerId: row.owner_user_id };
       },
     );
-    return this.present(result, includeFinancials);
+    return this.present(
+      result.snapshot,
+      this.scopeAllowsOwner(financialScope, actor, result.ownerId),
+    );
   }
 
   private assertDocumentType(documentType: string): asserts documentType is DocumentType {
@@ -734,18 +801,24 @@ export class DocumentSetsService {
       ...snapshot.lines.map((line) => line.thumbnail_file_id),
     ].filter((id): id is string => Boolean(id));
     if (fileIds.length === 0) return { thumbnails: {} };
+    const dataScope = await this.fileScope(actor, ['files:view', 'files:download']);
     const files = await withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        const result = await client.query<{ id: string; storage_key: string; mime_type: string }>(
-          `SELECT id, storage_key, mime_type FROM files
-            WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL AND mime_type LIKE 'image/%'`,
-          [fileIds],
+        return this.files.findManyInScope(
+          client,
+          { userId: actor.userId, tenantId: actor.tenantId, dataScope },
+          fileIds,
         );
-        return result.rows;
       },
     );
+    if (
+      files.length !== new Set(fileIds).size ||
+      files.some((file) => !file.mime_type.startsWith('image/'))
+    ) {
+      throw new DocumentWorkbenchNotFoundException('Document asset');
+    }
     const data = new Map<string, string>();
     for (const file of files) {
       const buffer = await this.streamBuffer(await this.storage.get(file.storage_key));

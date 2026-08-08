@@ -79,13 +79,25 @@ export class ProductsService {
     private readonly rbac: RbacService,
   ) {}
 
-  private async canViewFinancials(actor: DocumentWorkbenchActor): Promise<boolean> {
-    return (
-      await this.rbac.checkPermission(actor.userId, actor.tenantId, 'document_financials:view')
-    ).allowed;
+  private restrictsToOwner(dataScope: string): boolean {
+    return dataScope === 'own' || dataScope === 'assigned';
   }
 
-  private response(row: ProductRow, includeFinancials: boolean) {
+  private scopeAllowsOwner(dataScope: string, actor: DocumentWorkbenchActor, ownerId: string) {
+    return dataScope === 'all' || (this.restrictsToOwner(dataScope) && ownerId === actor.userId);
+  }
+
+  private async financialScope(actor: DocumentWorkbenchActor): Promise<string> {
+    const permission = await this.rbac.checkPermission(
+      actor.userId,
+      actor.tenantId,
+      'document_financials:view',
+    );
+    return permission.allowed ? permission.dataScope : 'none';
+  }
+
+  private response(row: ProductRow, actor: DocumentWorkbenchActor, financialScope: string) {
+    const includeFinancials = this.scopeAllowsOwner(financialScope, actor, row.owner_user_id);
     return {
       id: row.id,
       owner_user_id: row.owner_user_id,
@@ -105,6 +117,12 @@ export class ProductsService {
       created_at: row.created_at,
       updated_at: row.updated_at,
     };
+  }
+
+  private auditProjection(row: ProductRow) {
+    const safe: Partial<ProductRow> = { ...row };
+    delete safe.cost_unit_price;
+    return safe;
   }
 
   private async validateCustomValues(
@@ -136,17 +154,35 @@ export class ProductsService {
     }
   }
 
-  private async row(client: PoolClient, id: string, lock = false): Promise<ProductRow> {
+  private async row(
+    client: PoolClient,
+    actor: DocumentWorkbenchActor,
+    id: string,
+    lock = false,
+  ): Promise<ProductRow> {
+    const params: unknown[] = [id];
+    let scope = '';
+    if (this.restrictsToOwner(actor.dataScope)) {
+      params.push(actor.userId);
+      scope = ` AND owner_user_id = $${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scope = ' AND false';
+    }
     const result = await client.query<ProductRow>(
-      `SELECT ${PRODUCT_COLUMNS} FROM products WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
-      [id],
+      `SELECT ${PRODUCT_COLUMNS} FROM products
+        WHERE id = $1${scope}${lock ? ' FOR UPDATE' : ''}`,
+      params,
     );
     if (result.rows.length === 0) throw new DocumentWorkbenchNotFoundException('Product');
     return result.rows[0];
   }
 
   async create(actor: DocumentWorkbenchActor, dto: CreateProductDto) {
-    if (dto.cost_unit_price !== undefined && !(await this.canViewFinancials(actor))) {
+    const financialScope = await this.financialScope(actor);
+    if (
+      dto.cost_unit_price !== undefined &&
+      !this.scopeAllowsOwner(financialScope, actor, actor.userId)
+    ) {
       throw new InvalidDocumentWorkbenchDataException('Cost price permission is required');
     }
     try {
@@ -186,12 +222,12 @@ export class ProductsService {
             action: 'product.created',
             resourceType: 'product',
             resourceId: result.rows[0].id,
-            after: result.rows[0],
+            after: this.auditProjection(result.rows[0]),
           });
           return result.rows[0];
         },
       );
-      return this.response(row, await this.canViewFinancials(actor));
+      return this.response(row, actor, financialScope);
     } catch (error) {
       if ((error as { constraint?: string }).constraint === 'uq_products_tenant_sku') {
         throw new DocumentWorkbenchConflictException('Product SKU already exists', 'DUPLICATE_SKU');
@@ -205,6 +241,12 @@ export class ProductsService {
     const pageSize = query.pageSize ?? 20;
     const params: unknown[] = [];
     const conditions: string[] = [];
+    if (this.restrictsToOwner(actor.dataScope)) {
+      params.push(actor.userId);
+      conditions.push(`owner_user_id = $${params.length}`);
+    } else if (actor.dataScope !== 'all') {
+      conditions.push('false');
+    }
     if (query.active !== undefined) {
       params.push(query.active);
       conditions.push(`active = $${params.length}`);
@@ -214,7 +256,7 @@ export class ProductsService {
       conditions.push(`(sku ILIKE $${params.length} OR name ILIKE $${params.length})`);
     }
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-    const includeFinancials = await this.canViewFinancials(actor);
+    const financialScope = await this.financialScope(actor);
     return withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
@@ -231,7 +273,7 @@ export class ProductsService {
           [...params, pageSize, (page - 1) * pageSize],
         );
         return {
-          data: rows.rows.map((row) => this.response(row, includeFinancials)),
+          data: rows.rows.map((row) => this.response(row, actor, financialScope)),
           page,
           pageSize,
           total: Number(total.rows[0].count),
@@ -241,24 +283,29 @@ export class ProductsService {
   }
 
   async get(actor: DocumentWorkbenchActor, id: string) {
+    const financialScope = await this.financialScope(actor);
     const row = await withTenantContext(
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
-      (client) => this.row(client, id),
+      (client) => this.row(client, actor, id),
     );
-    return this.response(row, await this.canViewFinancials(actor));
+    return this.response(row, actor, financialScope);
   }
 
   async update(actor: DocumentWorkbenchActor, id: string, dto: UpdateProductDto) {
-    if (dto.cost_unit_price !== undefined && !(await this.canViewFinancials(actor))) {
-      throw new InvalidDocumentWorkbenchDataException('Cost price permission is required');
-    }
+    const financialScope = await this.financialScope(actor);
     try {
       const row = await withTenantContext(
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
-          const before = await this.row(client, id, true);
+          const before = await this.row(client, actor, id, true);
+          if (
+            dto.cost_unit_price !== undefined &&
+            !this.scopeAllowsOwner(financialScope, actor, before.owner_user_id)
+          ) {
+            throw new InvalidDocumentWorkbenchDataException('Cost price permission is required');
+          }
           if (dto.custom_values !== undefined) {
             await this.validateCustomValues(client, dto.custom_values);
           }
@@ -306,13 +353,13 @@ export class ProductsService {
             action: 'product.updated',
             resourceType: 'product',
             resourceId: id,
-            before,
-            after: result.rows[0],
+            before: this.auditProjection(before),
+            after: this.auditProjection(result.rows[0]),
           });
           return result.rows[0];
         },
       );
-      return this.response(row, await this.canViewFinancials(actor));
+      return this.response(row, actor, financialScope);
     } catch (error) {
       if ((error as { constraint?: string }).constraint === 'uq_products_tenant_sku') {
         throw new DocumentWorkbenchConflictException('Product SKU already exists', 'DUPLICATE_SKU');

@@ -1,3 +1,5 @@
+import type { DocumentPackageSnapshot } from './document-packing';
+
 export const DOCUMENT_TYPES = ['quote', 'pi', 'sc', 'ci', 'pl'] as const;
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 export type DocumentLanguage = 'zh' | 'en' | 'ru' | 'es' | 'de' | 'ar';
@@ -59,6 +61,7 @@ export interface PublicDocumentSnapshot {
     country: string | null;
   } | null;
   lines: PublicDocumentLineSnapshot[];
+  packages: DocumentPackageSnapshot[];
   totals: {
     subtotal: string;
     discount_amount: string;
@@ -122,6 +125,7 @@ export function toPublicDocumentSnapshot(
     logo_file_id: snapshot.logo_file_id,
     signature_file_id: snapshot.signature_file_id,
     customer: snapshot.customer,
+    packages: snapshot.packages,
     lines: snapshot.lines.map((line) => ({
       id: line.id,
       line_no: line.line_no,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildDocumentPackages } from './document-packing';
 import { renderDocumentHtml } from './document-pdf.renderer';
 import { InternalDocumentSnapshot, toPublicDocumentSnapshot } from './document.types';
 
@@ -27,6 +28,14 @@ function internalSnapshot(): InternalDocumentSnapshot {
     logo_file_id: null,
     signature_file_id: null,
     customer: null,
+    packages: [
+      {
+        package_no: 'A-1',
+        line_nos: [1],
+        total_weight_kg: '2.0000',
+        total_volume_cbm: '0.200000',
+      },
+    ],
     lines: [
       {
         id: '20000000-0000-4000-8000-000000000001',
@@ -85,5 +94,37 @@ describe('customer document projection', () => {
     expect(html).not.toContain('43210.99');
     expect(html).toContain('dir="rtl"');
     expect(html).toContain('فاتورة تجارية');
+  });
+
+  it('renders normal packages separately and combines matching package numbers', () => {
+    const source = internalSnapshot();
+    const lines = [
+      source.lines[0],
+      {
+        ...source.lines[0],
+        id: '20000000-0000-4000-8000-000000000002',
+        line_no: 2,
+        sku: 'SKU-2',
+        name: 'منتج 2',
+      },
+    ];
+    const normal = toPublicDocumentSnapshot({
+      ...source,
+      packing_mode: 'normal',
+      lines,
+      packages: buildDocumentPackages(lines, 'normal'),
+    });
+    const combined = toPublicDocumentSnapshot({
+      ...source,
+      packing_mode: 'combined',
+      lines,
+      packages: buildDocumentPackages(lines, 'combined'),
+    });
+
+    const normalHtml = renderDocumentHtml(normal, 'pl', { thumbnails: {} });
+    const combinedHtml = renderDocumentHtml(combined, 'pl', { thumbnails: {} });
+    expect(normalHtml.match(/<td>A-1<\/td>/g)).toHaveLength(2);
+    expect(combinedHtml.match(/<td>A-1<\/td>/g)).toHaveLength(1);
+    expect(combinedHtml).toContain('SKU-1<br>SKU-2');
   });
 });

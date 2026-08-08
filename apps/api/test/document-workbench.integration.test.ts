@@ -24,6 +24,8 @@ import {
   TEST_TENANT2_SLUG,
   TEST_TENANT_ID,
   TEST_TENANT_SLUG,
+  TEST_USER2_EMAIL,
+  TEST_USER2_ID,
   TEST_USER3_EMAIL,
   TEST_USER4_EMAIL,
   TEST_USER4_ID,
@@ -51,11 +53,14 @@ describe('foreign trade document workbench (integration)', () => {
   let storage: FakeStorageProvider;
   let renderer: ContractPdfRenderer;
   let adminToken: string;
+  let salesToken: string;
   let viewerToken: string;
   let tenant2Token: string;
   let documentId: string;
   let exportId: string;
   let rawToken: string;
+  let adminProductId: string;
+  let adminImageId: string;
 
   function bearer(token: string) {
     return { Authorization: `Bearer ${token}` };
@@ -69,7 +74,7 @@ describe('foreign trade document workbench (integration)', () => {
     return response.body.accessToken as string;
   }
 
-  async function grantReadOnlyViewer(): Promise<void> {
+  async function grantScopedViewer(): Promise<void> {
     const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
     await client.connect();
     try {
@@ -86,7 +91,17 @@ describe('foreign trade document workbench (integration)', () => {
       ]);
       await client.query(
         `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
-         SELECT $1,$2,id,'all' FROM permissions WHERE code='document_sets:view'`,
+         SELECT $1, $2, permission.id, grant_spec.data_scope
+           FROM (
+             VALUES
+               ('products:view', 'assigned'),
+               ('products:manage', 'assigned'),
+               ('document_sets:view', 'all'),
+               ('document_sets:manage', 'assigned'),
+               ('document_financials:view', 'assigned'),
+               ('audit_logs:view', 'all')
+           ) AS grant_spec(code, data_scope)
+           JOIN permissions permission ON permission.code = grant_spec.code`,
         [TEST_TENANT_ID, roleId],
       );
     } finally {
@@ -132,6 +147,31 @@ describe('foreign trade document workbench (integration)', () => {
     };
   }
 
+  function publicDocumentPayload(quoteNumber: string) {
+    return {
+      quote_number: quoteNumber,
+      pricing_mode: 'final_price',
+      language: 'en',
+      incoterm: 'FOB',
+      pricing_currency: 'USD',
+      settlement_currency: 'USD',
+      exchange_rate: '1.0000000000',
+      packing_mode: 'normal',
+      lines: [
+        {
+          sku: 'PUBLIC-1',
+          name: 'Public product',
+          quantity: '1.000',
+          unit: 'pcs',
+          unit_price: '10.0000',
+          weight_kg: '1.0000',
+          volume_cbm: '0.100000',
+          package_no: 'BOX-1',
+        },
+      ],
+    };
+  }
+
   beforeAll(async () => {
     storage = new FakeStorageProvider();
     renderer = new ContractPdfRenderer();
@@ -147,8 +187,9 @@ describe('foreign trade document workbench (integration)', () => {
     );
     await app.init();
     pool = app.get<Pool>(APP_POOL);
-    await grantReadOnlyViewer();
+    await grantScopedViewer();
     adminToken = await login(TEST_USER_EMAIL);
+    salesToken = await login(TEST_USER2_EMAIL);
     viewerToken = await login(TEST_USER4_EMAIL);
     tenant2Token = await login(TEST_USER3_EMAIL, TEST_TENANT2_SLUG);
   });
@@ -191,10 +232,86 @@ describe('foreign trade document workbench (integration)', () => {
         unit: 'pcs',
         default_currency: 'USD',
         default_unit_price: '12.3400',
+        cost_unit_price: '6.5000',
         custom_values: { customer_code: 'CUSTOM-001' },
       });
     expect(product.status).toBe(201);
+    adminProductId = product.body.id;
+    expect(product.body.cost_unit_price).toBe('6.5000');
     expect(product.body.custom_values).toEqual({ customer_code: 'CUSTOM-001' });
+  });
+
+  it('enforces own and assigned product scopes for list, get, and update', async () => {
+    const salesDenied = await request(app.getHttpServer())
+      .get(`/api/products/${adminProductId}`)
+      .set(bearer(salesToken));
+    expect(salesDenied.status).toBe(404);
+
+    const salesProduct = await request(app.getHttpServer())
+      .post('/api/products')
+      .set(bearer(salesToken))
+      .send({
+        sku: 'SALES-OWN',
+        name: 'Sales product',
+        unit: 'pcs',
+        default_currency: 'USD',
+        default_unit_price: '8.0000',
+      });
+    expect(salesProduct.status).toBe(201);
+    const salesList = await request(app.getHttpServer())
+      .get('/api/products?pageSize=100')
+      .set(bearer(salesToken));
+    expect(salesList.status).toBe(200);
+    expect(salesList.body.data.map((product: { id: string }) => product.id)).toContain(
+      salesProduct.body.id,
+    );
+    expect(salesList.body.data.map((product: { id: string }) => product.id)).not.toContain(
+      adminProductId,
+    );
+    const salesUpdated = await request(app.getHttpServer())
+      .patch(`/api/products/${salesProduct.body.id}`)
+      .set(bearer(salesToken))
+      .send({ name: 'Sales product updated' });
+    expect(salesUpdated.status).toBe(200);
+
+    const assignedDenied = await request(app.getHttpServer())
+      .get(`/api/products/${adminProductId}`)
+      .set(bearer(viewerToken));
+    expect(assignedDenied.status).toBe(404);
+    const assignedProduct = await request(app.getHttpServer())
+      .post('/api/products')
+      .set(bearer(viewerToken))
+      .send({
+        sku: 'ASSIGNED-OWN',
+        name: 'Assigned product',
+        unit: 'pcs',
+        default_currency: 'USD',
+        default_unit_price: '9.0000',
+        cost_unit_price: '4.0000',
+      });
+    expect(assignedProduct.status).toBe(201);
+    expect(assignedProduct.body.cost_unit_price).toBe('4.0000');
+    const assignedList = await request(app.getHttpServer())
+      .get('/api/products?pageSize=100')
+      .set(bearer(viewerToken));
+    expect(assignedList.status).toBe(200);
+    expect(assignedList.body.data.map((product: { id: string }) => product.id)).toContain(
+      assignedProduct.body.id,
+    );
+    expect(assignedList.body.data.map((product: { id: string }) => product.id)).not.toContain(
+      adminProductId,
+    );
+    const assignedUpdated = await request(app.getHttpServer())
+      .patch(`/api/products/${assignedProduct.body.id}`)
+      .set(bearer(viewerToken))
+      .send({ cost_unit_price: '4.5000' });
+    expect(assignedUpdated.status).toBe(200);
+    expect(assignedUpdated.body.cost_unit_price).toBe('4.5000');
+    const assignedCannotUpdateAdmin = await request(app.getHttpServer())
+      .patch(`/api/products/${adminProductId}`)
+      .set(bearer(viewerToken))
+      .send({ name: 'Forbidden update' });
+    expect(assignedCannotUpdateAdmin.status).toBe(404);
   });
 
   it('creates a customer-optional cost-profit draft with exact totals', async () => {
@@ -208,6 +325,14 @@ describe('foreign trade document workbench (integration)', () => {
     expect(response.body.totals.subtotal).toBe('1234.00');
     expect(response.body.internal_totals.cost_total).toBe('789.00');
     expect(response.body.lines[0].cost_unit_price).toBe('7.8900');
+    expect(response.body.packages).toEqual([
+      {
+        package_no: 'PALLET-A',
+        line_nos: [1],
+        total_weight_kg: '42.0000',
+        total_volume_cbm: '0.150000',
+      },
+    ]);
     expect(response.body.lines[0].custom_fields).toEqual([
       {
         field_key: 'customer_code',
@@ -218,7 +343,7 @@ describe('foreign trade document workbench (integration)', () => {
     ]);
   });
 
-  it('redacts costs for an authorized viewer without financial permission', async () => {
+  it('redacts costs when the financial scope excludes the document owner', async () => {
     const response = await request(app.getHttpServer())
       .get(`/api/document-sets/${documentId}`)
       .set(bearer(viewerToken));
@@ -229,11 +354,112 @@ describe('foreign trade document workbench (integration)', () => {
     expect(JSON.stringify(response.body)).not.toContain('7.8900');
   });
 
+  it('intersects document scope with assigned financial scope per owner', async () => {
+    const salesDenied = await request(app.getHttpServer())
+      .get(`/api/document-sets/${documentId}`)
+      .set(bearer(salesToken));
+    expect(salesDenied.status).toBe(404);
+
+    const ownDocument = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(viewerToken))
+      .send({ ...documentPayload(), quote_number: 'QT-ASSIGNED-OWN' });
+    expect(ownDocument.status).toBe(201);
+    expect(ownDocument.body.internal_totals.cost_total).toBe('789.00');
+    expect(ownDocument.body.lines[0].cost_unit_price).toBe('7.8900');
+
+    const list = await request(app.getHttpServer())
+      .get('/api/document-sets?pageSize=100')
+      .set(bearer(viewerToken));
+    expect(list.status).toBe(200);
+    const other = list.body.data.find(
+      (document: { document_set_id: string }) => document.document_set_id === documentId,
+    );
+    const own = list.body.data.find(
+      (document: { document_set_id: string }) =>
+        document.document_set_id === ownDocument.body.document_set_id,
+    );
+    expect(other.internal_totals).toBeUndefined();
+    expect(own.internal_totals.cost_total).toBe('789.00');
+
+    const deniedUpdate = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${documentId}`)
+      .set(bearer(viewerToken))
+      .send({ ...documentPayload(), quote_number: 'QT-FORBIDDEN', expected_version: 1 });
+    expect(deniedUpdate.status).toBe(404);
+  });
+
   it('enforces cross-tenant RLS on document ids', async () => {
     const response = await request(app.getHttpServer())
       .get(`/api/document-sets/${documentId}`)
       .set(bearer(tenant2Token));
     expect(response.status).toBe(404);
+  });
+
+  it('stores audit projections without product or document financials', async () => {
+    for (const auditTarget of [
+      { action: 'product.created', resourceId: adminProductId },
+      { action: 'trade_document.created', resourceId: documentId },
+    ]) {
+      const list = await request(app.getHttpServer())
+        .get(
+          `/api/audit-logs?action=${auditTarget.action}&resourceId=${auditTarget.resourceId}&pageSize=1`,
+        )
+        .set(bearer(viewerToken));
+      expect(list.status).toBe(200);
+      expect(list.body.data).toHaveLength(1);
+      const detail = await request(app.getHttpServer())
+        .get(`/api/audit-logs/${list.body.data[0].id}`)
+        .set(bearer(viewerToken));
+      expect(detail.status).toBe(200);
+      const serialized = JSON.stringify(detail.body);
+      expect(serialized).not.toContain('cost_unit_price');
+      expect(serialized).not.toContain('internal_expenses');
+      expect(serialized).not.toContain('internal_totals');
+      expect(serialized).not.toContain('gross_profit');
+      expect(serialized).not.toContain('7.8900');
+      expect(serialized).not.toContain('6.5000');
+    }
+  });
+
+  it('rejects same-tenant document assets outside Files view and download scope', async () => {
+    const image = await request(app.getHttpServer())
+      .post('/api/files')
+      .set(bearer(adminToken))
+      .attach('file', Buffer.from('fake-png'), {
+        filename: 'brand.png',
+        contentType: 'image/png',
+      });
+    expect(image.status).toBe(201);
+    adminImageId = image.body.id;
+
+    const unauthorizedReference = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(salesToken))
+      .send({ ...publicDocumentPayload('QT-FILE-SCOPE-DENIED'), logo_file_id: adminImageId });
+    expect(unauthorizedReference.status).toBe(400);
+
+    const legacyDocument = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({ ...publicDocumentPayload('QT-FILE-SCOPE-LEGACY'), logo_file_id: adminImageId });
+    expect(legacyDocument.status).toBe(201);
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      await admin.query(`UPDATE trade_document_sets SET owner_user_id=$1 WHERE id=$2`, [
+        TEST_USER2_ID,
+        legacyDocument.body.document_set_id,
+      ]);
+    } finally {
+      await admin.end();
+    }
+
+    const unauthorizedExport = await request(app.getHttpServer())
+      .post(`/api/document-sets/${legacyDocument.body.document_set_id}/exports/pl`)
+      .set(bearer(salesToken));
+    expect(unauthorizedExport.status).toBe(404);
+    expect(renderer.snapshots).toHaveLength(0);
   });
 
   it('exports a true PDF archive using only the public projection', async () => {
@@ -243,7 +469,7 @@ describe('foreign trade document workbench (integration)', () => {
     expect(response.status).toBe(201);
     exportId = response.body.id;
     expect(response.body.file_id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(storage.objects.size).toBe(1);
+    expect(storage.objects.size).toBe(2);
     expect(renderer.snapshots).toHaveLength(1);
     expect(JSON.stringify(renderer.snapshots[0])).not.toContain('7.8900');
     expect(JSON.stringify(renderer.snapshots[0])).not.toContain('internal_totals');
