@@ -5,7 +5,7 @@ import { migrate } from './migrate.js';
 import { rollback } from './rollback.js';
 
 const LEGACY_RELEASE_MIGRATION = '051_kir_21_p0_web_remediation.sql';
-const CURRENT_RELEASE_MIGRATION = '052_backfill_inquiries_update_role_grants.sql';
+const CURRENT_RELEASE_MIGRATION = '053_foreign_trade_document_workbench.sql';
 const LEGACY_RELEASE_CHECKSUM = '4e697e314712a1796550ef7cf8a6852a75ef1d7296cf489b0ab9f0d5b4fd0992';
 
 interface MigrationRow {
@@ -148,7 +148,9 @@ async function rehearseLegacyUpgrade(pool: Pool): Promise<void> {
   if ((await latestMigration(pool)) !== CURRENT_RELEASE_MIGRATION) {
     throw new Error(`Legacy upgrade rehearsal must start at ${CURRENT_RELEASE_MIGRATION}.`);
   }
-  await rollback();
+  while ((await latestMigration(pool)) !== LEGACY_RELEASE_MIGRATION) {
+    await rollback();
+  }
   if ((await latestMigration(pool)) !== LEGACY_RELEASE_MIGRATION) {
     throw new Error(`Rollback did not produce a legacy ${LEGACY_RELEASE_MIGRATION} database.`);
   }

@@ -96,5 +96,14 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ocr:view', '查看 OCR 结果', 'view'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ocr:process', '发起 OCR 识别', 'process'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ai:view', '查看 AI 结果', 'view'),
-  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ai:process', '发起 AI 调用', 'process')
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000008', 'ai:process', '发起 AI 调用', 'process'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'products:view', '查看产品库', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'products:manage', '维护产品库', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000007', 'product_fields:manage', '配置产品字段', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:view', '查看外贸单证', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:manage', '维护外贸单证', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:lock', '锁定外贸单证', 'lock'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:export', '导出外贸单证', 'export'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_links:manage', '管理客户追踪链接', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'document_financials:view', '查看单证成本利润', 'view')
 ON CONFLICT (code) DO NOTHING;

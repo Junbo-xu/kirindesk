@@ -13,5 +13,6 @@ import { AuthModule } from '../auth/auth.module';
   // GET /api/files/download would hit :id and fail ParseUUIDPipe).
   controllers: [FileDownloadController, FilesController],
   providers: [FilesService],
+  exports: [FilesService],
 })
 export class FilesModule {}

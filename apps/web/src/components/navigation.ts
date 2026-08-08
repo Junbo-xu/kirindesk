@@ -17,6 +17,7 @@ export const NAVIGATION: NavigationGroup[] = [
       { label: '角色工作台', to: '/', anyOf: ['workbench:view'], workflow: true },
       { label: '询盘', to: '/inquiries', anyOf: ['inquiries:view'], workflow: true },
       { label: '报价任务', to: '/quote-tasks', anyOf: ['quotations:view'], workflow: true },
+      { label: '外贸单证', to: '/documents', anyOf: ['document_sets:view'], workflow: true },
       {
         label: 'PI 与收款',
         to: '/commercial',
@@ -46,6 +47,7 @@ export const NAVIGATION: NavigationGroup[] = [
     label: '业务资料',
     items: [
       { label: '客户', to: '/customers', anyOf: ['customers:view'] },
+      { label: '产品库', to: '/products', anyOf: ['products:view'] },
       { label: '供应商', to: '/suppliers', anyOf: ['suppliers:view'] },
       { label: '文件', to: '/files', anyOf: ['files:view'] },
     ],

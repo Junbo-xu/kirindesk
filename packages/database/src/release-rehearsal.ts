@@ -12,9 +12,29 @@ const ZERO_HASH = '0'.repeat(64);
 const SOURCE_DATABASE_NAME = 'kirindesk_test';
 const POSTGRES_IMAGE = 'postgres:16.10-alpine';
 const BASELINE_MIGRATION = '049_stage_2e_finance_profit_commission.sql';
-const RELEASE_MIGRATION = '052_backfill_inquiries_update_role_grants.sql';
+const RELEASE_MIGRATION = '053_foreign_trade_document_workbench.sql';
 const BASELINE_SOURCE_FILTERS: Record<string, string> = {
   finance_review_items: `subject_type <> 'after_sales_adjustment'`,
+};
+const RELEASE_PERMISSION_CODES = [
+  'products:view',
+  'products:manage',
+  'product_fields:manage',
+  'document_sets:view',
+  'document_sets:manage',
+  'document_sets:lock',
+  'document_sets:export',
+  'document_links:manage',
+  'document_financials:view',
+];
+const quotedReleasePermissionCodes = RELEASE_PERMISSION_CODES.map(
+  (code) => `'${code.replace(/'/g, "''")}'`,
+).join(',');
+const RELEASE_RECONCILIATION_FILTERS: Record<string, string> = {
+  permissions: `code NOT IN (${quotedReleasePermissionCodes})`,
+  role_permissions: `permission_id NOT IN (
+    SELECT id FROM permissions WHERE code IN (${quotedReleasePermissionCodes})
+  )`,
 };
 
 interface TableSnapshot {
@@ -198,17 +218,19 @@ async function hasTenantColumn(pool: Pool, table: string): Promise<boolean> {
   return rows[0]?.present ?? false;
 }
 
-async function collectTable(pool: Pool, table: string): Promise<TableSnapshot> {
+async function collectTable(pool: Pool, table: string, filter?: string): Promise<TableSnapshot> {
   const quotedTable = quoteIdentifier(table);
+  const where = filter ? ` WHERE ${filter}` : '';
   const rowCount = await pool.query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM ${quotedTable}`,
+    `SELECT COUNT(*)::text AS count FROM ${quotedTable}${where}`,
   );
   const tenantRows: Record<string, string> = {};
   if (await hasTenantColumn(pool, table)) {
     const grouped = await pool.query<{ tenant_id: string | null; count: string }>(
       `SELECT tenant_id::text, COUNT(*)::text AS count
-         FROM ${quotedTable}
-        GROUP BY tenant_id
+       FROM ${quotedTable}
+       ${where}
+      GROUP BY tenant_id
         ORDER BY tenant_id NULLS FIRST`,
     );
     for (const row of grouped.rows) tenantRows[row.tenant_id ?? '<null>'] = row.count;
@@ -216,7 +238,8 @@ async function collectTable(pool: Pool, table: string): Promise<TableSnapshot> {
   const numericTotals: Record<string, string> = {};
   for (const column of await numericColumns(pool, table)) {
     const result = await pool.query<{ total: string }>(
-      `SELECT COALESCE(SUM(${quoteIdentifier(column)}), 0)::text AS total FROM ${quotedTable}`,
+      `SELECT COALESCE(SUM(${quoteIdentifier(column)}), 0)::text AS total
+         FROM ${quotedTable}${where}`,
     );
     numericTotals[column] = result.rows[0]?.total ?? '0';
   }
@@ -338,7 +361,11 @@ async function verifyAuditChains(
   return results;
 }
 
-async function snapshot(pool: Pool, selectedTables?: string[]): Promise<Snapshot> {
+async function snapshot(
+  pool: Pool,
+  selectedTables?: string[],
+  filters: Record<string, string> = {},
+): Promise<Snapshot> {
   const available = await listTables(pool);
   const tables = selectedTables ?? available;
   for (const table of tables) {
@@ -346,7 +373,9 @@ async function snapshot(pool: Pool, selectedTables?: string[]): Promise<Snapshot
       throw new Error(`Expected table is missing after migration: ${table}`);
   }
   const tableSnapshots: Record<string, TableSnapshot> = {};
-  for (const table of tables) tableSnapshots[table] = await collectTable(pool, table);
+  for (const table of tables) {
+    tableSnapshots[table] = await collectTable(pool, table, filters[table]);
+  }
   const migrations = await pool.query<{ filename: string; checksum: string }>(
     'SELECT filename, checksum FROM _migrations ORDER BY filename',
   );
@@ -507,13 +536,21 @@ async function rehearse(): Promise<void> {
     }
     const baselineTables = await listTables(shadowPool);
     const copiedSourceData = await copyBaselineData(sourcePool, shadowPool, baselineTables);
-    const beforeMigration = await snapshot(shadowPool);
+    const beforeMigration = await snapshot(
+      shadowPool,
+      baselineTables,
+      RELEASE_RECONCILIATION_FILTERS,
+    );
     assertHealthySnapshot('shadow before migration', beforeMigration);
     run('pnpm', ['--filter', '@kirindesk/database', 'migrate'], {
       ...process.env,
       DATABASE_URL: shadowUrl,
     });
-    const afterMigration = await snapshot(shadowPool, baselineTables);
+    const afterMigration = await snapshot(
+      shadowPool,
+      baselineTables,
+      RELEASE_RECONCILIATION_FILTERS,
+    );
     assertHealthySnapshot('shadow after migration', afterMigration);
     assertEqualMigrationData('shadow migration', beforeMigration, afterMigration);
     assertEqualMigrations(sourceSnapshot.migrations, afterMigration.migrations);

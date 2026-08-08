@@ -34,6 +34,7 @@ import { FinanceModule } from './finance/finance.module';
 import { SamplesAfterSalesModule } from './samples-after-sales/samples-after-sales.module';
 import { ReleaseModule } from './release/release.module';
 import { ObservabilityModule } from './observability/observability.module';
+import { DocumentWorkbenchModule } from './document-workbench/document-workbench.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { ObservabilityModule } from './observability/observability.module';
     FulfillmentModule,
     FinanceModule,
     SamplesAfterSalesModule,
+    DocumentWorkbenchModule,
   ],
 })
 export class AppModule {}

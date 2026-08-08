@@ -157,6 +157,19 @@ export const QUOTATION_PERMS = [
   'quotations:audit',
 ] as const;
 
+export const DOCUMENT_WORKBENCH_PERMS = [
+  'products:view',
+  'products:manage',
+  'product_fields:manage',
+  'document_sets:view',
+  'document_sets:manage',
+  'document_sets:lock',
+  'document_sets:export',
+  'document_links:manage',
+] as const;
+
+export const DOCUMENT_FINANCIAL_PERMS = ['document_financials:view'] as const;
+
 const STAGE_2A_PERMS: { code: string; moduleId: string }[] = [
   ...INQUIRY_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
   ...QUOTE_SELECTION_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
@@ -253,6 +266,10 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
   ...REPORTS_PERMS.map((code) => ({ code, moduleId: REPORTS_MODULE_ID })),
   ...AUDIT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
   ...USER_MGMT_PERMS.map((code) => ({ code, moduleId: SYSTEM_MODULE_ID })),
+  ...DOCUMENT_WORKBENCH_PERMS.map((code) => ({
+    code,
+    moduleId: code === 'product_fields:manage' ? SYSTEM_MODULE_ID : ORDERS_MODULE_ID,
+  })),
 ];
 
 interface RoleSpec {
@@ -474,6 +491,34 @@ export async function seedFixture(adminConnectionString: string): Promise<void> 
     );
     for (const spec of ROLE_SPECS.filter((row) => row.roleId !== SALES_ROLE_ID)) {
       for (const permission of stage2ePermissionRows.rows) {
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           VALUES ($1, $2, $3, 'all')`,
+          [spec.tenantId, spec.roleId, permission.id],
+        );
+      }
+    }
+
+    const documentFinancialPermissionRows = await client.query<{ id: string }>(
+      `SELECT id FROM permissions WHERE code = ANY($1)`,
+      [DOCUMENT_FINANCIAL_PERMS as unknown as string[]],
+    );
+    if (documentFinancialPermissionRows.rows.length === 0) {
+      for (const code of DOCUMENT_FINANCIAL_PERMS) {
+        await client.query(
+          `INSERT INTO permissions (module_id, code, name, action) VALUES ($1, $2, $2, 'view')
+           ON CONFLICT (code) DO NOTHING`,
+          [FINANCE_MODULE_ID, code],
+        );
+      }
+      const refreshed = await client.query<{ id: string }>(
+        `SELECT id FROM permissions WHERE code = ANY($1)`,
+        [DOCUMENT_FINANCIAL_PERMS as unknown as string[]],
+      );
+      documentFinancialPermissionRows.rows.push(...refreshed.rows);
+    }
+    for (const spec of ROLE_SPECS.filter((row) => row.roleId !== SALES_ROLE_ID)) {
+      for (const permission of documentFinancialPermissionRows.rows) {
         await client.query(
           `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
            VALUES ($1, $2, $3, 'all')`,

@@ -106,6 +106,15 @@ import {
   ExecuteAfterSalesInput,
   SampleOrder,
   UpdateInquiryInput,
+  ProductFieldsResponse,
+  ProductInput,
+  ProductRecord,
+  PublicTradeDocument,
+  TradeDocumentExport,
+  TradeDocumentInput,
+  TradeDocumentLink,
+  TradeDocumentSet,
+  TradeDocumentType,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -1265,6 +1274,100 @@ export const apiClient = {
   },
   payInvoice(id: string): Promise<InvoiceSummary> {
     return request<InvoiceSummary>(`/api/billing/invoices/${id}/pay`, { method: 'POST' });
+  },
+  listProducts(
+    query: { q?: string; active?: boolean; page?: number; pageSize?: number } = {},
+  ): Promise<Paginated<ProductRecord>> {
+    const params = new URLSearchParams();
+    if (query.q) params.set('q', query.q);
+    if (query.active !== undefined) params.set('active', String(query.active));
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<ProductRecord>>(`/api/products${qs ? `?${qs}` : ''}`);
+  },
+  createProduct(input: ProductInput): Promise<ProductRecord> {
+    return request<ProductRecord>('/api/products', { method: 'POST', body: input });
+  },
+  updateProduct(
+    id: string,
+    input: Partial<ProductInput> & { active?: boolean },
+  ): Promise<ProductRecord> {
+    return request<ProductRecord>(`/api/products/${id}`, { method: 'PATCH', body: input });
+  },
+  listProductFields(): Promise<ProductFieldsResponse> {
+    return request<ProductFieldsResponse>('/api/product-fields');
+  },
+  createProductField(input: {
+    field_key: string;
+    label: string;
+    data_type: 'text' | 'number' | 'boolean' | 'date';
+    sort_order?: number;
+    document_types?: TradeDocumentType[];
+  }): Promise<unknown> {
+    return request('/api/product-fields', { method: 'POST', body: input });
+  },
+  updateProductField(id: string, input: Record<string, unknown>): Promise<unknown> {
+    return request(`/api/product-fields/${id}`, { method: 'PATCH', body: input });
+  },
+  deleteProductField(id: string): Promise<{ id: string; deleted: true }> {
+    return request(`/api/product-fields/${id}`, { method: 'DELETE' });
+  },
+  listDocumentSets(
+    query: { q?: string; status?: 'draft' | 'locked'; page?: number; pageSize?: number } = {},
+  ): Promise<Paginated<TradeDocumentSet>> {
+    const params = new URLSearchParams();
+    if (query.q) params.set('q', query.q);
+    if (query.status) params.set('status', query.status);
+    if (query.page !== undefined) params.set('page', String(query.page));
+    if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+    const qs = params.toString();
+    return request<Paginated<TradeDocumentSet>>(`/api/document-sets${qs ? `?${qs}` : ''}`);
+  },
+  getDocumentSet(id: string): Promise<TradeDocumentSet> {
+    return request<TradeDocumentSet>(`/api/document-sets/${id}`);
+  },
+  createDocumentSet(input: TradeDocumentInput): Promise<TradeDocumentSet> {
+    return request<TradeDocumentSet>('/api/document-sets', { method: 'POST', body: input });
+  },
+  updateDocumentSet(
+    id: string,
+    input: TradeDocumentInput & { expected_version: number },
+  ): Promise<TradeDocumentSet> {
+    return request<TradeDocumentSet>(`/api/document-sets/${id}`, { method: 'PATCH', body: input });
+  },
+  lockDocumentSet(id: string): Promise<TradeDocumentSet> {
+    return request<TradeDocumentSet>(`/api/document-sets/${id}/lock`, { method: 'POST' });
+  },
+  exportDocumentSet(id: string, documentType: TradeDocumentType): Promise<TradeDocumentExport> {
+    return request<TradeDocumentExport>(`/api/document-sets/${id}/exports/${documentType}`, {
+      method: 'POST',
+    });
+  },
+  listDocumentExports(id: string): Promise<TradeDocumentExport[]> {
+    return request<TradeDocumentExport[]>(`/api/document-sets/${id}/exports`);
+  },
+  createDocumentLink(
+    exportId: string,
+  ): Promise<{ id: string; token: string; path: string; expires_at: null }> {
+    return request('/api/document-links', { method: 'POST', body: { export_id: exportId } });
+  },
+  listDocumentLinks(id: string): Promise<TradeDocumentLink[]> {
+    return request<TradeDocumentLink[]>(`/api/document-sets/${id}/links`);
+  },
+  revokeDocumentLink(id: string): Promise<{ id: string; revoked: true }> {
+    return request(`/api/document-links/${id}`, { method: 'DELETE' });
+  },
+  openPublicDocument(token: string): Promise<PublicTradeDocument> {
+    return request<PublicTradeDocument>(`/api/public/documents/${encodeURIComponent(token)}`, {
+      auth: false,
+    });
+  },
+  confirmPublicDocument(token: string): Promise<{ confirmed: true; confirmed_at: string }> {
+    return request(`/api/public/documents/${encodeURIComponent(token)}/confirm`, {
+      method: 'POST',
+      auth: false,
+    });
   },
 };
 

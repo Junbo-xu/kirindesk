@@ -54,6 +54,9 @@ import { FulfillmentPage } from './fulfillment/FulfillmentPage';
 import { FinanceWorkspacePage } from './finance/FinanceWorkspacePage';
 import { SampleOrdersPage } from './samples-after-sales/SampleOrdersPage';
 import { AfterSalesPage } from './samples-after-sales/AfterSalesPage';
+import { DocumentWorkbenchPage } from './document-workbench/DocumentWorkbenchPage';
+import { ProductCatalogPage } from './document-workbench/ProductCatalogPage';
+import { PublicTrackingPage } from './document-workbench/PublicTrackingPage';
 
 function sensitive(element: React.ReactNode) {
   return <SensitivePageWatermark>{element}</SensitivePageWatermark>;
@@ -66,6 +69,7 @@ export function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
+          <Route path="/track/:token" element={<PublicTrackingPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<AppLayout />}>
               <Route path="/forbidden" element={<ForbiddenPage />} />
@@ -103,6 +107,12 @@ export function App() {
               </Route>
               <Route element={<PermissionRoute permission="finance_reviews:view" />}>
                 <Route path="/finance" element={sensitive(<FinanceWorkspacePage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="document_sets:view" />}>
+                <Route path="/documents" element={sensitive(<DocumentWorkbenchPage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="products:view" />}>
+                <Route path="/products" element={sensitive(<ProductCatalogPage />)} />
               </Route>
 
               <Route element={<PermissionRoute permission="customers:view" />}>
