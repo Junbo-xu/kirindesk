@@ -61,6 +61,8 @@ describe('foreign trade document workbench (integration)', () => {
   let rawToken: string;
   let adminProductId: string;
   let adminImageId: string;
+  let conversionDocumentId: string;
+  let conversionOrderId: string;
 
   function bearer(token: string) {
     return { Authorization: `Bearer ${token}` };
@@ -523,6 +525,177 @@ describe('foreign trade document workbench (integration)', () => {
       .get(`/api/document-sets/${documentId}`)
       .set(bearer(tenant2Token));
     expect(response.status).toBe(404);
+  });
+
+  it('requires a customer and both document/order permissions for internal conversion', async () => {
+    const missingCustomer = await request(app.getHttpServer())
+      .post(`/api/document-sets/${documentId}/sales-order`)
+      .set(bearer(adminToken))
+      .send({
+        order_number: 'SO-MISSING-CUSTOMER',
+        idempotency_key: 'a1000000-0000-4000-8000-000000000001',
+      });
+    expect(missingCustomer.status).toBe(400);
+    expect(missingCustomer.body.code).toBe('QUOTE_CUSTOMER_REQUIRED');
+
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage A customer', country: 'DE' });
+    expect(customer.status).toBe(201);
+    const quote = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({
+        ...documentPayload(),
+        quote_number: 'QT-STAGE-A-CONVERSION',
+        customer_id: customer.body.id,
+      });
+    expect(quote.status).toBe(201);
+    conversionDocumentId = quote.body.document_set_id;
+
+    const missingOrderPermission = await request(app.getHttpServer())
+      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .set(bearer(viewerToken))
+      .send({
+        order_number: 'SO-STAGE-A-DENIED',
+        idempotency_key: 'a1000000-0000-4000-8000-000000000002',
+      });
+    expect(missingOrderPermission.status).toBe(403);
+
+    const crossTenant = await request(app.getHttpServer())
+      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .set(bearer(tenant2Token))
+      .send({
+        order_number: 'SO-STAGE-A-CROSS-TENANT',
+        idempotency_key: 'a1000000-0000-4000-8000-000000000003',
+      });
+    expect(crossTenant.status).toBe(404);
+  });
+
+  it('idempotently creates a draft sales order without customer confirmation', async () => {
+    const payload = {
+      order_number: 'SO-STAGE-A-001',
+      idempotency_key: 'a1000000-0000-4000-8000-000000000004',
+    };
+    const created = await request(app.getHttpServer())
+      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .set(bearer(adminToken))
+      .send(payload);
+    expect(created.status).toBe(201);
+    conversionOrderId = created.body.id;
+    expect(created.body).toMatchObject({
+      order_number: payload.order_number,
+      status: 'draft',
+      currency: 'USD',
+      total_amount: '1184.30',
+      source_quote_id: conversionDocumentId,
+      source_quote_version: 1,
+      source_quote_number: 'QT-STAGE-A-CONVERSION',
+    });
+    expect(created.body.items).toHaveLength(1);
+    expect(created.body.items[0]).toMatchObject({
+      description: 'Steel bottle',
+      product_code: 'BOTTLE-750',
+      quantity: '100.000',
+      unit_price: '12.3400',
+    });
+    expect(JSON.stringify(created.body)).not.toContain('source_quote_snapshot');
+    expect(JSON.stringify(created.body)).not.toContain('7.8900');
+
+    const replay = await request(app.getHttpServer())
+      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .set(bearer(adminToken))
+      .send(payload);
+    expect(replay.status).toBe(201);
+    expect(replay.body.id).toBe(conversionOrderId);
+
+    const retryWithNewRequestKey = await request(app.getHttpServer())
+      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .set(bearer(adminToken))
+      .send({
+        order_number: 'SO-STAGE-A-RETRY-IGNORED',
+        idempotency_key: 'a1000000-0000-4000-8000-000000000005',
+      });
+    expect(retryWithNewRequestKey.status).toBe(201);
+    expect(retryWithNewRequestKey.body.id).toBe(conversionOrderId);
+
+    const quote = await request(app.getHttpServer())
+      .get(`/api/document-sets/${conversionDocumentId}`)
+      .set(bearer(adminToken));
+    expect(quote.status).toBe(200);
+    expect(quote.body.sales_order_id).toBe(conversionOrderId);
+
+    const order = await request(app.getHttpServer())
+      .get(`/api/sales-orders/${conversionOrderId}`)
+      .set(bearer(adminToken));
+    expect(order.status).toBe(200);
+    expect(order.body.source_quote_id).toBe(conversionDocumentId);
+    expect(order.body.source_quote_version).toBe(1);
+    expect(JSON.stringify(order.body)).not.toContain('source_quote_snapshot');
+    expect(JSON.stringify(order.body)).not.toContain('7.8900');
+
+    const auditList = await request(app.getHttpServer())
+      .get(
+        `/api/audit-logs?action=trade_document.converted_to_sales_order&resourceId=${conversionDocumentId}&pageSize=1`,
+      )
+      .set(bearer(viewerToken));
+    expect(auditList.status).toBe(200);
+    expect(auditList.body.data).toHaveLength(1);
+    const auditDetail = await request(app.getHttpServer())
+      .get(`/api/audit-logs/${auditList.body.data[0].id}`)
+      .set(bearer(viewerToken));
+    expect(auditDetail.status).toBe(200);
+    expect(JSON.stringify(auditDetail.body)).not.toContain('source_quote_snapshot');
+    expect(JSON.stringify(auditDetail.body)).not.toContain('cost_unit_price');
+    expect(JSON.stringify(auditDetail.body)).not.toContain('7.8900');
+  });
+
+  it('preserves the exact source version and financial snapshot outside public responses', async () => {
+    const quoteBefore = await request(app.getHttpServer())
+      .get(`/api/document-sets/${conversionDocumentId}`)
+      .set(bearer(adminToken));
+    const updated = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${conversionDocumentId}`)
+      .set(bearer(adminToken))
+      .send({
+        ...updatePayloadFromDocument(quoteBefore.body),
+        terms: 'Updated after order conversion',
+      });
+    expect(updated.status).toBe(200);
+    expect(updated.body.source_version).toBe(2);
+
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      const stored = await admin.query<{
+        source_quote_version: number;
+        source_quote_snapshot: {
+          source_version: number;
+          lines: Array<{ cost_unit_price: string | null }>;
+        };
+        orders: string;
+        conversion_audits: string;
+      }>(
+        `SELECT order_record.source_quote_version,
+                order_record.source_quote_snapshot,
+                (SELECT COUNT(*)::text FROM sales_orders WHERE source_quote_id = $1::uuid) AS orders,
+                (SELECT COUNT(*)::text FROM audit_logs
+                  WHERE resource_id = $1::text
+                    AND action = 'trade_document.converted_to_sales_order')
+                  AS conversion_audits
+           FROM sales_orders order_record
+          WHERE order_record.id = $2`,
+        [conversionDocumentId, conversionOrderId],
+      );
+      expect(stored.rows[0].source_quote_version).toBe(1);
+      expect(stored.rows[0].source_quote_snapshot.source_version).toBe(1);
+      expect(stored.rows[0].source_quote_snapshot.lines[0].cost_unit_price).toBe('7.8900');
+      expect(stored.rows[0].orders).toBe('1');
+      expect(stored.rows[0].conversion_audits).toBe('1');
+    } finally {
+      await admin.end();
+    }
   });
 
   it('stores audit projections without product or document financials', async () => {

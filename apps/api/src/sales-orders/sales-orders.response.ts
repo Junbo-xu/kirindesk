@@ -10,6 +10,11 @@ export interface SalesOrderRow {
   pi_file_id: string | null;
   inquiry_id: string | null;
   source_pi_id: string | null;
+  source_quote_id: string | null;
+  source_quote_version: number | null;
+  source_quote_number: string | null;
+  source_quote_snapshot: Record<string, unknown> | null;
+  source_quote_idempotency_key: string | null;
   currency: string;
   // pg returns numeric as a string; kept as string end-to-end to avoid
   // floating-point precision loss on money values.
@@ -36,6 +41,9 @@ export interface SalesOrderResponse {
   pi_number: string | null;
   inquiry_id: string | null;
   source_pi_id: string | null;
+  source_quote_id: string | null;
+  source_quote_version: number | null;
+  source_quote_number: string | null;
   currency: string;
   total_amount: string;
   status: string;
@@ -65,6 +73,9 @@ export function toSalesOrderResponse(row: SalesOrderRow): SalesOrderResponse {
     pi_number: row.pi_number,
     inquiry_id: row.inquiry_id,
     source_pi_id: row.source_pi_id,
+    source_quote_id: row.source_quote_id,
+    source_quote_version: row.source_quote_version,
+    source_quote_number: row.source_quote_number,
     currency: row.currency,
     total_amount: row.total_amount,
     status: row.status,

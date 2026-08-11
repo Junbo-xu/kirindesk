@@ -82,6 +82,7 @@ export interface InternalDocumentSnapshot extends PublicDocumentSnapshot {
   internal_expenses: string;
   lines: Array<
     PublicDocumentLineSnapshot & {
+      product_id: string | null;
       cost_unit_price: string | null;
       cost_total: string | null;
     }

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { Pool, PoolClient } from 'pg';
@@ -9,6 +9,12 @@ import { FilesService } from '../files/files.service';
 import { RbacService } from '../rbac/rbac.service';
 import { STORAGE_PROVIDER, StorageProvider } from '../storage/storage-provider.interface';
 import { QuotaService } from '../subscription/quota.service';
+import { OrderItemRow, toOrderItemResponse } from '../sales-orders/dto/order-item.dto';
+import {
+  SalesOrderResponse,
+  SalesOrderRow,
+  toSalesOrderResponse,
+} from '../sales-orders/sales-orders.response';
 import {
   DocumentWorkbenchConflictException,
   DocumentWorkbenchNotFoundException,
@@ -26,6 +32,7 @@ import {
   toPublicDocumentSnapshot,
 } from './document.types';
 import {
+  ConvertDocumentSetToSalesOrderDto,
   CreateDocumentSetDto,
   CreateShareLinkDto,
   ListDocumentSetsQuery,
@@ -317,6 +324,42 @@ export class DocumentSetsService {
     return result.rows;
   }
 
+  private async withSalesOrderLink(
+    client: PoolClient,
+    row: DocumentSetRow,
+    snapshot: InternalDocumentSnapshot,
+  ): Promise<InternalDocumentSnapshot> {
+    if (snapshot.sales_order_id) return snapshot;
+    const result = await client.query<{ id: string }>(
+      `SELECT id FROM sales_orders WHERE source_quote_id = $1 ORDER BY created_at LIMIT 1`,
+      [row.id],
+    );
+    return result.rows[0] ? { ...snapshot, sales_order_id: result.rows[0].id } : snapshot;
+  }
+
+  private async convertedSalesOrder(
+    client: PoolClient,
+    documentSetId: string,
+  ): Promise<SalesOrderResponse | null> {
+    const order = await client.query<SalesOrderRow>(
+      `SELECT * FROM sales_orders
+        WHERE source_quote_id = $1 AND deleted_at IS NULL
+        ORDER BY created_at LIMIT 1`,
+      [documentSetId],
+    );
+    if (!order.rows[0]) return null;
+    const items = await client.query<OrderItemRow>(
+      `SELECT * FROM sales_order_items
+        WHERE order_id = $1 AND deleted_at IS NULL
+        ORDER BY line_no`,
+      [order.rows[0].id],
+    );
+    return {
+      ...toSalesOrderResponse(order.rows[0]),
+      items: items.rows.map(toOrderItemResponse),
+    };
+  }
+
   private async snapshot(
     client: PoolClient,
     row: DocumentSetRow,
@@ -366,6 +409,7 @@ export class DocumentSetsService {
     });
     const snapshotLines = lines.map((line, index) => ({
       id: line.id,
+      product_id: line.product_id,
       line_no: line.line_no,
       sku: line.sku,
       name: line.name,
@@ -394,7 +438,7 @@ export class DocumentSetsService {
           document_types: field.document_types,
         })),
     }));
-    return {
+    return this.withSalesOrderLink(client, row, {
       document_set_id: row.id,
       sales_order_id: row.sales_order_id,
       source_version: row.version,
@@ -439,7 +483,7 @@ export class DocumentSetsService {
         gross_margin_bps: totals.gross_margin_bps,
       },
       generated_at: generatedAt.toISOString(),
-    };
+    });
   }
 
   private present(snapshot: InternalDocumentSnapshot, includeFinancials: boolean) {
@@ -666,7 +710,7 @@ export class DocumentSetsService {
         const row = await this.setRow(client, actor, id);
         const snapshot =
           row.status === 'locked' && row.locked_snapshot
-            ? row.locked_snapshot
+            ? await this.withSalesOrderLink(client, row, row.locked_snapshot)
             : await this.snapshot(client, row);
         return { snapshot, ownerId: row.owner_user_id };
       },
@@ -798,7 +842,10 @@ export class DocumentSetsService {
         if (row.status === 'locked') {
           if (!row.locked_snapshot)
             throw new DocumentWorkbenchConflictException('Locked snapshot is missing');
-          return { snapshot: row.locked_snapshot, ownerId: row.owner_user_id };
+          return {
+            snapshot: await this.withSalesOrderLink(client, row, row.locked_snapshot),
+            ownerId: row.owner_user_id,
+          };
         }
         const lockedAt = new Date();
         const snapshot = await this.snapshot(client, { ...row, status: 'locked' }, lockedAt);
@@ -824,6 +871,186 @@ export class DocumentSetsService {
       result.snapshot,
       this.scopeAllowsOwner(financialScope, actor, result.ownerId),
     );
+  }
+
+  async convertToSalesOrder(
+    actor: DocumentWorkbenchActor,
+    id: string,
+    dto: ConvertDocumentSetToSalesOrderDto,
+  ): Promise<SalesOrderResponse> {
+    const orderPermission = await this.rbac.checkPermission(
+      actor.userId,
+      actor.tenantId,
+      'orders:create',
+    );
+    if (!orderPermission.allowed) throw new ForbiddenException('Permission denied');
+
+    try {
+      return await withTenantContext(
+        this.pool,
+        { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+        async (client) => {
+          const row = await this.setRow(client, actor, id, true);
+          if (
+            orderPermission.dataScope !== 'all' &&
+            (!this.restrictsToOwner(orderPermission.dataScope) ||
+              row.owner_user_id !== actor.userId)
+          ) {
+            throw new DocumentWorkbenchNotFoundException('Document set');
+          }
+
+          const existing = await this.convertedSalesOrder(client, id);
+          if (existing) return existing;
+          if (row.sales_order_id) {
+            throw new DocumentWorkbenchConflictException(
+              'Quote is already linked to a sales order',
+              'QUOTE_ALREADY_LINKED',
+            );
+          }
+          if (!row.customer_id) {
+            throw new InvalidDocumentWorkbenchDataException(
+              'A customer is required before creating a sales order',
+              'QUOTE_CUSTOMER_REQUIRED',
+            );
+          }
+          const customerParams: unknown[] = [row.customer_id];
+          let customerScope = '';
+          if (this.restrictsToOwner(orderPermission.dataScope)) {
+            customerParams.push(actor.userId);
+            customerScope = ` AND owner_user_id = $${customerParams.length}`;
+          }
+          const customer = await client.query(
+            `SELECT id FROM customers WHERE id = $1 AND deleted_at IS NULL${customerScope}`,
+            customerParams,
+          );
+          if (customer.rows.length === 0) {
+            throw new DocumentWorkbenchNotFoundException('Customer');
+          }
+
+          const idempotencyOwner = await client.query<{ source_quote_id: string }>(
+            `SELECT source_quote_id FROM sales_orders
+              WHERE source_quote_idempotency_key = $1 AND deleted_at IS NULL`,
+            [dto.idempotency_key],
+          );
+          if (idempotencyOwner.rows[0] && idempotencyOwner.rows[0].source_quote_id !== row.id) {
+            throw new DocumentWorkbenchConflictException(
+              'Idempotency key was already used for another quote',
+              'IDEMPOTENCY_KEY_REUSED',
+            );
+          }
+
+          const sourceSnapshot =
+            row.status === 'locked' && row.locked_snapshot
+              ? await this.withSalesOrderLink(client, row, row.locked_snapshot)
+              : await this.snapshot(client, row);
+          if (!['RMB', 'USD', 'HKD', 'EUR'].includes(sourceSnapshot.pricing_currency)) {
+            throw new InvalidDocumentWorkbenchDataException(
+              'Quote currency is not supported by sales orders',
+              'UNSUPPORTED_ORDER_CURRENCY',
+            );
+          }
+
+          const inserted = await client.query<SalesOrderRow>(
+            `INSERT INTO sales_orders
+               (tenant_id, customer_id, owner_user_id, order_number, pi_number, pi_file_id,
+                currency, total_amount, status, notes, source_quote_id, source_quote_version,
+                source_quote_number, source_quote_snapshot, source_quote_idempotency_key)
+             VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,'draft',NULL,$7,$8,$9,$10,$11)
+             ON CONFLICT (tenant_id, source_quote_id) DO NOTHING
+             RETURNING *`,
+            [
+              actor.tenantId,
+              row.customer_id,
+              actor.userId,
+              dto.order_number,
+              sourceSnapshot.pricing_currency,
+              sourceSnapshot.totals.grand_total,
+              row.id,
+              sourceSnapshot.source_version,
+              sourceSnapshot.quote_number,
+              JSON.stringify(sourceSnapshot),
+              dto.idempotency_key,
+            ],
+          );
+          if (!inserted.rows[0]) {
+            const replay = await this.convertedSalesOrder(client, id);
+            if (replay) return replay;
+            throw new DocumentWorkbenchConflictException('Sales order conversion conflicted');
+          }
+
+          const itemRows: OrderItemRow[] = [];
+          for (const line of sourceSnapshot.lines) {
+            const item = await client.query<OrderItemRow>(
+              `INSERT INTO sales_order_items
+                 (tenant_id, order_id, line_no, description, product_code, unit,
+                  quantity, unit_price, line_total, notes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL)
+               RETURNING *`,
+              [
+                actor.tenantId,
+                inserted.rows[0].id,
+                line.line_no,
+                line.name,
+                line.sku,
+                line.unit,
+                line.quantity,
+                line.unit_price,
+                line.line_total,
+              ],
+            );
+            itemRows.push(item.rows[0]);
+          }
+          const response = {
+            ...toSalesOrderResponse(inserted.rows[0]),
+            items: itemRows.map(toOrderItemResponse),
+          };
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'sales_order.created',
+            resourceType: 'sales_order',
+            resourceId: inserted.rows[0].id,
+            after: response,
+          });
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'trade_document.converted_to_sales_order',
+            resourceType: 'trade_document_set',
+            resourceId: row.id,
+            before: {
+              quote_number: sourceSnapshot.quote_number,
+              source_version: sourceSnapshot.source_version,
+              sales_order_id: null,
+            },
+            after: {
+              quote_number: sourceSnapshot.quote_number,
+              source_version: sourceSnapshot.source_version,
+              sales_order_id: inserted.rows[0].id,
+              order_number: inserted.rows[0].order_number,
+            },
+          });
+          return response;
+        },
+      );
+    } catch (error) {
+      const constraint = (error as { constraint?: string }).constraint;
+      if (constraint === 'uq_sales_orders_tenant_order_number') {
+        throw new DocumentWorkbenchConflictException(
+          'Order number already exists',
+          'DUPLICATE_ORDER_NUMBER',
+        );
+      }
+      if (constraint === 'uq_sales_orders_source_quote_idempotency') {
+        throw new DocumentWorkbenchConflictException(
+          'Idempotency key was already used for another quote',
+          'IDEMPOTENCY_KEY_REUSED',
+        );
+      }
+      throw error;
+    }
   }
 
   private assertDocumentType(documentType: string): asserts documentType is DocumentType {

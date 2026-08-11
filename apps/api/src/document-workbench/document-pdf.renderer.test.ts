@@ -39,6 +39,7 @@ function internalSnapshot(): InternalDocumentSnapshot {
     lines: [
       {
         id: '20000000-0000-4000-8000-000000000001',
+        product_id: null,
         line_no: 1,
         sku: 'SKU-1',
         name: 'منتج',

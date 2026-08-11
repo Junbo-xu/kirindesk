@@ -211,6 +211,17 @@ export class UpdateDocumentSetDto extends CreateDocumentSetDto {
   expected_version!: number;
 }
 
+export class ConvertDocumentSetToSalesOrderDto {
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  order_number!: string;
+
+  @IsUUID()
+  idempotency_key!: string;
+}
+
 export class ListDocumentSetsQuery {
   @IsOptional()
   @IsString()
