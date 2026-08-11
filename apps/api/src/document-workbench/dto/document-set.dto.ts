@@ -6,6 +6,7 @@ import {
   IsHexColor,
   IsIn,
   IsInt,
+  IsISO8601,
   IsObject,
   IsOptional,
   IsString,
@@ -24,6 +25,7 @@ const MONEY_2 = /^\d{1,16}(\.\d{1,2})?$/;
 const RATE = /^(?!0+(\.0+)?$)\d{1,10}(\.\d{1,10})?$/;
 const WEIGHT = /^\d{1,14}(\.\d{1,4})?$/;
 const VOLUME = /^\d{1,12}(\.\d{1,6})?$/;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 export class DocumentLineInputDto {
   @IsOptional()
@@ -209,6 +211,45 @@ export class UpdateDocumentSetDto extends CreateDocumentSetDto {
   @IsInt()
   @Min(1)
   expected_version!: number;
+}
+
+export class ConvertDocumentSetToSalesOrderDto {
+  @Transform(trim)
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  order_number!: string;
+
+  @Transform(trim)
+  @IsString()
+  @Matches(IDEMPOTENCY_KEY)
+  idempotency_key!: string;
+
+  @IsInt()
+  @Min(1)
+  expected_version!: number;
+}
+
+export class LockSalesOrderForFulfillmentDto {
+  @IsISO8601({ strict: true })
+  expected_updated_at!: string;
+}
+
+export class SyncSalesOrderDocumentsDto {
+  @Transform(trim)
+  @IsString()
+  @Matches(IDEMPOTENCY_KEY)
+  idempotency_key!: string;
+
+  @IsISO8601({ strict: true })
+  expected_updated_at!: string;
+}
+
+export class GenerateSalesOrderPurchaseOrdersDto {
+  @Transform(trim)
+  @IsString()
+  @Matches(IDEMPOTENCY_KEY)
+  idempotency_key!: string;
 }
 
 export class ListDocumentSetsQuery {

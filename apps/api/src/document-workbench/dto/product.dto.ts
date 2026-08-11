@@ -63,6 +63,19 @@ export class CreateProductDto {
   cost_unit_price?: string;
 
   @IsOptional()
+  @IsUUID()
+  supplier_id?: string;
+
+  @IsOptional()
+  @IsIn(['RMB', 'USD', 'HKD', 'EUR'])
+  purchase_currency?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(MONEY)
+  purchase_unit_price?: string;
+
+  @IsOptional()
   @IsString()
   @Matches(WEIGHT)
   weight_kg?: string;
@@ -127,7 +140,20 @@ export class UpdateProductDto {
   @IsOptional()
   @IsString()
   @Matches(MONEY)
-  cost_unit_price?: string;
+  cost_unit_price?: string | null;
+
+  @IsOptional()
+  @IsUUID()
+  supplier_id?: string | null;
+
+  @IsOptional()
+  @IsIn(['RMB', 'USD', 'HKD', 'EUR'])
+  purchase_currency?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @Matches(MONEY)
+  purchase_unit_price?: string | null;
 
   @IsOptional()
   @IsString()

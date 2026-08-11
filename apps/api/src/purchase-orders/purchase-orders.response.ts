@@ -22,6 +22,7 @@ export interface PurchaseOrderRow {
   fx_captured_at: Date | null;
   total_amount_base: string | null;
   source_procurement_request_id: string | null;
+  source_sales_order_generation_id: string | null;
   expected_total_amount: string | null;
   final_total_amount: string | null;
   placed_by: string | null;
@@ -46,6 +47,7 @@ export interface PurchaseOrderResponse {
   fx_captured_at: Date | null;
   total_amount_base: string | null;
   source_procurement_request_id: string | null;
+  source_sales_order_generation_id: string | null;
   expected_total_amount: string | null;
   final_total_amount: string | null;
   placed_at: Date | null;
@@ -79,6 +81,7 @@ export function toPurchaseOrderResponse(
     fx_captured_at: row.fx_captured_at,
     total_amount_base: row.total_amount_base,
     source_procurement_request_id: row.source_procurement_request_id,
+    source_sales_order_generation_id: row.source_sales_order_generation_id,
     expected_total_amount: row.expected_total_amount,
     final_total_amount: row.final_total_amount,
     placed_at: row.placed_at,

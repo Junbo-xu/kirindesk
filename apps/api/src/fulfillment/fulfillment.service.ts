@@ -3,12 +3,15 @@ import type { Pool, PoolClient } from 'pg';
 import { AuditService } from '../audit/audit.service';
 import { APP_POOL } from '../database/database.module';
 import { withTenantContext } from '../database/context';
+import { FilesService } from '../files/files.service';
+import { RbacService } from '../rbac/rbac.service';
 import { BusinessEventsService } from '../workbench/business-events.service';
 import {
   AddLogisticsEventDto,
   CompleteExpenseFxDto,
   ConfirmGoodsReceiptDto,
   CreateGoodsReceiptDto,
+  CreateShipmentBoxDto,
   CreateShipmentDto,
   DeliverShipmentDto,
   InspectGoodsReceiptDto,
@@ -35,6 +38,49 @@ interface SalesOrderRow {
   order_number: string;
   currency: string;
   status: string;
+  source_pi_id: string | null;
+  fulfillment_locked_snapshot: SalesOrderPackingSnapshot | null;
+}
+
+interface SalesOrderPackingSnapshot {
+  id: string;
+  items: Array<{
+    id: string;
+    line_no: number;
+    quantity: string;
+    product: {
+      weight_kg: string | null;
+      volume_cbm: string | null;
+    } | null;
+  }>;
+}
+
+interface PackingListLineRow {
+  line_no: number;
+  sales_order_item_id: string;
+  quantity: string;
+  weight_kg: string | null;
+  volume_cbm: string | null;
+  package_no: string | null;
+}
+
+export interface PackingListPackage {
+  package_no: string;
+  net_weight_kg: string | null;
+  volume_cbm: string | null;
+  items: Array<{
+    sales_order_item_id: string;
+    quantity: string;
+    weight_kg: string | null;
+    volume_cbm: string | null;
+  }>;
+}
+
+export interface PackingListSourceDetails {
+  document_set_id: string;
+  version: number;
+  source_order_locked: boolean | null;
+  packages: PackingListPackage[];
 }
 
 interface PurchaseOrderRow {
@@ -91,13 +137,22 @@ interface ShipmentRow {
   status: string;
   carrier: string;
   tracking_number: string;
+  idempotency_key: string | null;
+  creation_request: Record<string, unknown> | null;
+  packing_list_document_set_id: string | null;
+  packing_list_version: number | null;
+  packing_list_snapshot: Record<string, unknown> | null;
   created_by: string;
   dispatched_by: string | null;
   dispatched_at: Date | null;
+  in_transit_by: string | null;
+  in_transit_at: Date | null;
   delivered_by: string | null;
   delivered_at: Date | null;
   delivery_proof_file_id: string | null;
   delivery_note: string | null;
+  received_by_name: string | null;
+  delivery_exception_note: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -142,8 +197,10 @@ const RECEIPT_ITEM_COLUMNS = `id, purchase_order_item_id, sales_order_item_id,
   rejected_quantity::text AS rejected_quantity,
   quantity_variance::text AS quantity_variance`;
 const SHIPMENT_COLUMNS = `id, sales_order_id, batch_number, status, carrier, tracking_number,
-  created_by, dispatched_by, dispatched_at, delivered_by, delivered_at,
-  delivery_proof_file_id, delivery_note, created_at, updated_at`;
+  idempotency_key, creation_request, packing_list_document_set_id, packing_list_version,
+  packing_list_snapshot, created_by, dispatched_by, dispatched_at, in_transit_by,
+  in_transit_at, delivered_by, delivered_at, delivery_proof_file_id, delivery_note,
+  received_by_name, delivery_exception_note, created_at, updated_at`;
 const EXPENSE_COLUMNS = `id, sales_order_id, shipment_id, expense_type,
   amount::text AS amount, currency, fx_rate_to_rmb::text AS fx_rate_to_rmb,
   fx_source, fx_captured_at, amount_rmb::text AS amount_rmb, status, note,
@@ -154,6 +211,8 @@ export class FulfillmentService {
   constructor(
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly audit: AuditService,
+    private readonly rbac: RbacService,
+    private readonly files: FilesService,
     private readonly events: BusinessEventsService,
   ) {}
 
@@ -174,6 +233,26 @@ export class FulfillmentService {
     return { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' as const };
   }
 
+  private async fileScope(actor: FulfillmentActor): Promise<string> {
+    const permission = await this.rbac.checkPermission(actor.userId, actor.tenantId, 'files:view');
+    return permission.allowed ? permission.dataScope : 'none';
+  }
+
+  private scaled(value: string, places: number): bigint {
+    const [whole = '0', fraction = ''] = value.split('.');
+    return BigInt(`${whole || '0'}${(fraction + '0'.repeat(places)).slice(0, places)}`);
+  }
+
+  private decimal(value: bigint, places: number): string {
+    const text = value.toString().padStart(places + 1, '0');
+    return `${text.slice(0, -places)}.${text.slice(-places)}`;
+  }
+
+  private measure(quantity: string, perUnit: string, places: number): string {
+    const multiplied = this.scaled(quantity, 3) * this.scaled(perUnit, places);
+    return this.decimal((multiplied + 500n) / 1000n, places);
+  }
+
   private async salesOrder(
     client: PoolClient,
     actor: FulfillmentActor,
@@ -187,9 +266,12 @@ export class FulfillmentService {
       scope = ` AND owner_user_id = $${params.length}`;
     }
     const result = await client.query<SalesOrderRow>(
-      `SELECT id, owner_user_id, order_number, currency, status
+      `SELECT id, owner_user_id, order_number, currency, status, source_pi_id,
+              fulfillment_locked_snapshot
          FROM sales_orders
-        WHERE id = $1 AND source_pi_id IS NOT NULL AND deleted_at IS NULL${scope}
+        WHERE id = $1
+          AND (source_pi_id IS NOT NULL OR fulfillment_locked_snapshot IS NOT NULL)
+          AND deleted_at IS NULL${scope}
         ${lock ? 'FOR UPDATE' : ''}`,
       params,
     );
@@ -275,10 +357,15 @@ export class FulfillmentService {
               COALESCE(shipped.quantity, 0)::text AS shipped_quantity,
               COALESCE(delivered.quantity, 0)::text AS delivered_quantity,
               GREATEST(
-                LEAST(item.quantity, COALESCE(accepted.quantity, 0))
+                LEAST(
+                  item.quantity,
+                  CASE WHEN sales_order.fulfillment_locked_snapshot IS NOT NULL
+                    THEN item.quantity ELSE COALESCE(accepted.quantity, 0) END
+                )
                   - COALESCE(shipped.quantity, 0), 0
               )::text AS available_quantity
          FROM sales_order_items item
+         JOIN sales_orders sales_order ON sales_order.id = item.order_id
          LEFT JOIN LATERAL (
            SELECT sum(receipt_item.accepted_quantity) AS quantity
              FROM goods_receipt_items receipt_item
@@ -294,7 +381,7 @@ export class FulfillmentService {
                ON shipment.id = shipment_item.shipment_id
               AND shipment.tenant_id = shipment_item.tenant_id
             WHERE shipment_item.sales_order_item_id = item.id
-              AND shipment.status IN ('dispatched', 'delivered')
+              AND shipment.status IN ('dispatched', 'in_transit', 'delivered')
          ) shipped ON true
          LEFT JOIN LATERAL (
            SELECT sum(shipment_item.quantity) AS quantity
@@ -309,6 +396,94 @@ export class FulfillmentService {
       [orderId],
     );
     return result.rows;
+  }
+
+  private async packingListSourceDetails(
+    client: PoolClient,
+    orderId: string,
+  ): Promise<PackingListSourceDetails | null> {
+    const source = await client.query<{
+      document_set_id: string;
+      version: number;
+      source_order_locked: boolean | null;
+      packing_mode: 'normal' | 'combined';
+    }>(
+      `SELECT id AS document_set_id, version,
+              source_sales_order_locked AS source_order_locked, packing_mode
+         FROM trade_document_sets
+        WHERE sales_order_id = $1 AND source_sales_order_snapshot IS NOT NULL`,
+      [orderId],
+    );
+    if (!source.rows[0]) return null;
+
+    const lines = await client.query<PackingListLineRow>(
+      `SELECT document_line.line_no, order_item.id AS sales_order_item_id,
+              document_line.quantity::text AS quantity,
+              document_line.weight_kg::text AS weight_kg,
+              document_line.volume_cbm::text AS volume_cbm,
+              document_line.package_no
+         FROM trade_document_lines document_line
+         JOIN sales_order_items order_item
+           ON order_item.order_id = $2
+          AND order_item.line_no = document_line.line_no
+          AND order_item.deleted_at IS NULL
+        WHERE document_line.document_set_id = $1
+        ORDER BY document_line.line_no`,
+      [source.rows[0].document_set_id, orderId],
+    );
+
+    const packageGroups = new Map<string, PackingListLineRow[]>();
+    for (const line of lines.rows) {
+      const packageNo =
+        line.package_no?.trim() ||
+        (source.rows[0].packing_mode === 'normal' ? `PKG-${line.line_no}` : 'COMBINED-1');
+      if (source.rows[0].packing_mode === 'normal') {
+        packageGroups.set(`${packageNo}\u0000${line.line_no}`, [line]);
+      } else {
+        packageGroups.set(packageNo, [...(packageGroups.get(packageNo) ?? []), line]);
+      }
+    }
+
+    return {
+      document_set_id: source.rows[0].document_set_id,
+      version: source.rows[0].version,
+      source_order_locked: source.rows[0].source_order_locked,
+      packages: [...packageGroups.entries()].map(([key, packageLines]) => {
+        const packageNo = key.split('\u0000', 1)[0];
+        const completeMeasures = packageLines.every(
+          (line) => line.weight_kg !== null && line.volume_cbm !== null,
+        );
+        return {
+          package_no: packageNo,
+          net_weight_kg: completeMeasures
+            ? this.decimal(
+                packageLines.reduce(
+                  (total, line) =>
+                    total + this.scaled(this.measure(line.quantity, line.weight_kg!, 4), 4),
+                  0n,
+                ),
+                4,
+              )
+            : null,
+          volume_cbm: completeMeasures
+            ? this.decimal(
+                packageLines.reduce(
+                  (total, line) =>
+                    total + this.scaled(this.measure(line.quantity, line.volume_cbm!, 6), 6),
+                  0n,
+                ),
+                6,
+              )
+            : null,
+          items: packageLines.map((line) => ({
+            sales_order_item_id: line.sales_order_item_id,
+            quantity: line.quantity,
+            weight_kg: line.weight_kg,
+            volume_cbm: line.volume_cbm,
+          })),
+        };
+      }),
+    };
   }
 
   private async deriveAggregateStatus(client: PoolClient, order: SalesOrderRow): Promise<string> {
@@ -388,7 +563,7 @@ export class FulfillmentService {
     return { ...receipt, items: items.rows, files: files.rows, confirmations: confirmations.rows };
   }
 
-  private async shipmentResponse(client: PoolClient, shipment: ShipmentRow) {
+  private async shipmentResponse(client: PoolClient, shipment: ShipmentRow, idempotent = false) {
     const items = await client.query(
       `SELECT id, sales_order_item_id, quantity::text AS quantity,
               available_quantity_snapshot::text AS available_quantity_snapshot
@@ -398,6 +573,33 @@ export class FulfillmentService {
     const events = await client.query(
       `SELECT id, event_type, location, description, occurred_at, recorded_by, created_at
          FROM logistics_events WHERE shipment_id = $1 ORDER BY occurred_at, created_at, id`,
+      [shipment.id],
+    );
+    const boxes = await client.query(
+      `SELECT box.id, box.package_no,
+              box.gross_weight_kg::text AS gross_weight_kg,
+              box.net_weight_kg::text AS net_weight_kg,
+              box.volume_cbm::text AS volume_cbm,
+              COALESCE(
+                jsonb_agg(
+                  jsonb_build_object(
+                    'id', item.id,
+                    'sales_order_item_id', item.sales_order_item_id,
+                    'quantity', item.quantity::text
+                  ) ORDER BY item.id
+                ) FILTER (WHERE item.id IS NOT NULL),
+                '[]'::jsonb
+              ) AS items
+         FROM shipment_boxes box
+         LEFT JOIN shipment_box_items item ON item.shipment_box_id = box.id
+        WHERE box.shipment_id = $1
+        GROUP BY box.id, box.package_no, box.gross_weight_kg, box.net_weight_kg, box.volume_cbm
+        ORDER BY box.package_no, box.id`,
+      [shipment.id],
+    );
+    const deliveryFiles = await client.query(
+      `SELECT file_id, file_role, created_at
+         FROM shipment_delivery_files WHERE shipment_id = $1 ORDER BY created_at, id`,
       [shipment.id],
     );
     const receipts = await client.query(
@@ -413,9 +615,13 @@ export class FulfillmentService {
         WHERE link.shipment_id = $1 ORDER BY link.linked_at, link.id`,
       [shipment.id],
     );
+    const { creation_request: _creationRequest, ...publicShipment } = shipment;
     return {
-      ...shipment,
+      ...publicShipment,
+      idempotent,
       items: items.rows,
+      boxes: boxes.rows,
+      delivery_files: deliveryFiles.rows,
       logistics_events: events.rows,
       receipts: receipts.rows,
     };
@@ -463,6 +669,7 @@ export class FulfillmentService {
       );
       const items = await this.availableItems(client, order.id);
       const settings = await this.readSettings(client);
+      const packingSource = await this.packingListSourceDetails(client, order.id);
       const receipts = [];
       for (const receipt of receiptRows.rows) {
         receipts.push(await this.receiptResponse(client, receipt));
@@ -477,6 +684,7 @@ export class FulfillmentService {
         currency: order.currency,
         aggregate_status: await this.deriveAggregateStatus(client, order),
         settings,
+        packing_list_source: packingSource,
         items,
         purchase_orders: purchaseOrders.rows,
         goods_receipts: receipts,
@@ -998,22 +1206,254 @@ export class FulfillmentService {
     });
   }
 
-  async createShipment(actor: FulfillmentActor, orderId: string, dto: CreateShipmentDto) {
-    const itemIds = dto.items.map((item) => item.sales_order_item_id);
-    if (new Set(itemIds).size !== itemIds.length) {
+  private shipmentBoxes(dto: CreateShipmentDto): CreateShipmentBoxDto[] {
+    if (dto.boxes && dto.items) {
       throw new InvalidFulfillmentDataException(
-        'Each sales order item can appear only once',
-        'DUPLICATE_SHIPMENT_ITEM',
+        'Provide shipment boxes or legacy shipment items, not both',
+        'SHIPMENT_INPUT_AMBIGUOUS',
       );
     }
+    if (!dto.boxes && !dto.items) {
+      throw new InvalidFulfillmentDataException(
+        'At least one shipment box or legacy shipment item is required',
+        'SHIPMENT_ITEMS_REQUIRED',
+      );
+    }
+    return dto.boxes ?? [];
+  }
+
+  private aggregateShipmentQuantities(dto: CreateShipmentDto): Map<string, string> {
+    const quantities = new Map<string, bigint>();
+    const items = dto.boxes?.flatMap((box) => box.items) ?? dto.items ?? [];
+    for (const item of items) {
+      quantities.set(
+        item.sales_order_item_id,
+        (quantities.get(item.sales_order_item_id) ?? 0n) + this.scaled(item.quantity, 3),
+      );
+    }
+    return new Map(
+      [...quantities.entries()].map(([itemId, quantity]) => [itemId, this.decimal(quantity, 3)]),
+    );
+  }
+
+  private validateBoxes(boxes: CreateShipmentBoxDto[]): void {
+    const packageNumbers = boxes.map((box) => box.package_no.trim());
+    if (new Set(packageNumbers).size !== packageNumbers.length) {
+      throw new InvalidFulfillmentDataException(
+        'Package numbers must be unique within a shipment',
+        'DUPLICATE_PACKAGE_NUMBER',
+      );
+    }
+    for (const box of boxes) {
+      const itemIds = box.items.map((item) => item.sales_order_item_id);
+      if (new Set(itemIds).size !== itemIds.length) {
+        throw new InvalidFulfillmentDataException(
+          `Each sales order item can appear only once in package ${box.package_no.trim()}`,
+          'DUPLICATE_BOX_ITEM',
+        );
+      }
+      if (this.scaled(box.gross_weight_kg, 4) < this.scaled(box.net_weight_kg, 4)) {
+        throw new InvalidFulfillmentDataException(
+          `Gross weight cannot be less than net weight for package ${box.package_no.trim()}`,
+          'PACKAGE_WEIGHT_INVALID',
+        );
+      }
+    }
+  }
+
+  private async assertDirectProcurementApproved(
+    client: PoolClient,
+    order: SalesOrderRow,
+  ): Promise<void> {
+    if (!order.fulfillment_locked_snapshot) return;
+    const purchaseOrders = await client.query<{ count: string; all_approved: boolean }>(
+      `SELECT count(*)::text AS count,
+              COALESCE(bool_and(purchase_order.status = 'approved'), false) AS all_approved
+         FROM sales_order_purchase_orders link
+         JOIN purchase_orders purchase_order ON purchase_order.id = link.purchase_order_id
+        WHERE link.sales_order_id = $1
+          AND link.source_sales_order_generation_id IS NOT NULL
+          AND purchase_order.deleted_at IS NULL`,
+      [order.id],
+    );
+    if (purchaseOrders.rows[0].count === '0' || !purchaseOrders.rows[0].all_approved) {
+      throw new FulfillmentConflictException(
+        'Every generated purchase order must be approved before packing-driven shipment',
+        'PURCHASE_ORDERS_NOT_APPROVED',
+      );
+    }
+  }
+
+  private async packingSource(
+    client: PoolClient,
+    order: SalesOrderRow,
+    dto: CreateShipmentDto,
+    boxes: CreateShipmentBoxDto[],
+  ): Promise<Record<string, unknown> | null> {
+    const hasDocument = dto.packing_list_document_set_id !== undefined;
+    const hasVersion = dto.packing_list_version !== undefined;
+    if (hasDocument !== hasVersion) {
+      throw new InvalidFulfillmentDataException(
+        'Packing list document and version must be provided together',
+        'PACKING_LIST_SOURCE_INCOMPLETE',
+      );
+    }
+    if (order.fulfillment_locked_snapshot && !hasDocument) {
+      throw new FulfillmentConflictException(
+        'A locked generated packing list is required for this sales order',
+        'PACKING_LIST_SOURCE_REQUIRED',
+      );
+    }
+    if (!hasDocument) return null;
+    if (boxes.length === 0) {
+      throw new InvalidFulfillmentDataException(
+        'Packing-list shipments require box-level input',
+        'PACKING_BOXES_REQUIRED',
+      );
+    }
+    const source = await this.packingListSourceDetails(client, order.id);
+    if (!source || source.document_set_id !== dto.packing_list_document_set_id) {
+      throw new FulfillmentNotFoundException('Packing list source not found');
+    }
+    if (source.version !== dto.packing_list_version) {
+      throw new FulfillmentConflictException(
+        'Packing list version changed before shipment creation',
+        'PACKING_LIST_VERSION_CONFLICT',
+      );
+    }
+    if (source.source_order_locked !== true) {
+      throw new FulfillmentConflictException(
+        'Packing list must be synchronized from the locked sales order',
+        'PACKING_LIST_SOURCE_NOT_LOCKED',
+      );
+    }
+
+    const sourcePackages = new Map<string, PackingListPackage>();
+    for (const sourcePackage of source.packages) {
+      if (sourcePackages.has(sourcePackage.package_no)) {
+        throw new FulfillmentConflictException(
+          `Packing list package number ${sourcePackage.package_no} is ambiguous`,
+          'PACKING_LIST_PACKAGE_AMBIGUOUS',
+        );
+      }
+      sourcePackages.set(sourcePackage.package_no, sourcePackage);
+    }
+    for (const box of boxes) {
+      const packageNo = box.package_no.trim();
+      const sourcePackage = sourcePackages.get(packageNo);
+      if (!sourcePackage) {
+        throw new InvalidFulfillmentDataException(
+          `Package ${packageNo} is not present in packing list version ${source.version}`,
+          'PACKAGE_NOT_IN_PACKING_LIST',
+        );
+      }
+      const sourceItems = new Map(
+        sourcePackage.items.map((item) => [item.sales_order_item_id, item]),
+      );
+      let expectedNetWeight = 0n;
+      let expectedVolume = 0n;
+      for (const item of box.items) {
+        const sourceItem = sourceItems.get(item.sales_order_item_id);
+        if (!sourceItem) {
+          throw new InvalidFulfillmentDataException(
+            `Sales order item ${item.sales_order_item_id} is not assigned to package ${packageNo}`,
+            'PACKAGE_ITEM_MISMATCH',
+          );
+        }
+        if (this.scaled(item.quantity, 3) > this.scaled(sourceItem.quantity, 3)) {
+          throw new InvalidFulfillmentDataException(
+            `Shipment quantity exceeds packing list quantity for package ${packageNo}`,
+            'PACKAGE_QUANTITY_EXCEEDED',
+          );
+        }
+        if (!sourceItem.weight_kg || !sourceItem.volume_cbm) {
+          throw new InvalidFulfillmentDataException(
+            `Packing measures are missing for sales order item ${item.sales_order_item_id}`,
+            'PACKING_MEASURES_MISSING',
+          );
+        }
+        expectedNetWeight += this.scaled(this.measure(item.quantity, sourceItem.weight_kg, 4), 4);
+        expectedVolume += this.scaled(this.measure(item.quantity, sourceItem.volume_cbm, 6), 6);
+      }
+      if (expectedNetWeight !== this.scaled(box.net_weight_kg, 4)) {
+        throw new InvalidFulfillmentDataException(
+          `Net weight does not match packing list package ${packageNo}`,
+          'PACKAGE_NET_WEIGHT_MISMATCH',
+        );
+      }
+      if (expectedVolume !== this.scaled(box.volume_cbm, 6)) {
+        throw new InvalidFulfillmentDataException(
+          `Volume does not match packing list package ${packageNo}`,
+          'PACKAGE_VOLUME_MISMATCH',
+        );
+      }
+    }
+    return {
+      document_set_id: source.document_set_id,
+      document_version: source.version,
+      source_order_locked: true,
+      source_packages: source.packages,
+      boxes: boxes.map((box) => ({
+        package_no: box.package_no.trim(),
+        gross_weight_kg: box.gross_weight_kg,
+        net_weight_kg: box.net_weight_kg,
+        volume_cbm: box.volume_cbm,
+        items: box.items,
+      })),
+    };
+  }
+
+  async createShipment(actor: FulfillmentActor, orderId: string, dto: CreateShipmentDto) {
+    const boxes = this.shipmentBoxes(dto);
+    const inputById = this.aggregateShipmentQuantities(dto);
+    const itemIds = [...inputById.keys()];
     return withTenantContext(this.pool, this.context(actor), async (client) => {
       const order = await this.salesOrder(client, actor, orderId, true);
-      if (!['procurement', 'fulfillment'].includes(order.status)) {
+      const creationRequest = {
+        batch_number: dto.batch_number.trim(),
+        carrier: dto.carrier.trim(),
+        tracking_number: dto.tracking_number.trim(),
+        packing_list_document_set_id: dto.packing_list_document_set_id ?? null,
+        packing_list_version: dto.packing_list_version ?? null,
+        boxes,
+        items: dto.items ?? null,
+      };
+      const prior = await client.query<{ id: string; sales_order_id: string; same: boolean }>(
+        `SELECT id, sales_order_id, creation_request = $2::jsonb AS same
+           FROM shipments WHERE idempotency_key = $1`,
+        [dto.idempotency_key, JSON.stringify(creationRequest)],
+      );
+      if (prior.rows[0]) {
+        if (prior.rows[0].sales_order_id !== order.id) {
+          throw new FulfillmentConflictException(
+            'Idempotency key was already used for another sales order',
+            'IDEMPOTENCY_KEY_REUSED',
+          );
+        }
+        if (!prior.rows[0].same) {
+          throw new FulfillmentConflictException(
+            'Idempotency key was already used with different shipment input',
+            'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH',
+          );
+        }
+        const replay = await client.query<ShipmentRow>(
+          `SELECT ${SHIPMENT_COLUMNS} FROM shipments WHERE id = $1`,
+          [prior.rows[0].id],
+        );
+        return this.shipmentResponse(client, replay.rows[0], true);
+      }
+      const validStatuses = order.fulfillment_locked_snapshot
+        ? ['approved', 'procurement', 'fulfillment']
+        : ['procurement', 'fulfillment'];
+      if (!validStatuses.includes(order.status)) {
         throw new FulfillmentConflictException(
           'The sales order is not ready for fulfillment',
           'SALES_ORDER_NOT_SHIPPABLE',
         );
       }
+      await this.assertDirectProcurementApproved(client, order);
+      this.validateBoxes(boxes);
+      const packingSnapshot = await this.packingSource(client, order, dto, boxes);
       const availableItems = await this.availableItems(client, order.id);
       const selected = availableItems.filter((item) => itemIds.includes(item.id));
       if (selected.length !== itemIds.length) {
@@ -1022,7 +1462,6 @@ export class FulfillmentService {
           'SHIPMENT_ITEM_NOT_IN_ORDER',
         );
       }
-      const inputById = new Map(dto.items.map((item) => [item.sales_order_item_id, item.quantity]));
       for (const item of selected) {
         const allowed = await client.query<{ allowed: boolean }>(
           `SELECT $1::numeric <= $2::numeric AS allowed`,
@@ -1030,22 +1469,29 @@ export class FulfillmentService {
         );
         if (!allowed.rows[0].allowed) {
           throw new FulfillmentConflictException(
-            `Shipment quantity exceeds available accepted quantity for line ${item.line_no}`,
+            `Shipment quantity exceeds available quantity for line ${item.line_no}`,
             'SHIPMENT_QUANTITY_EXCEEDED',
           );
         }
       }
       const inserted = await client.query<ShipmentRow>(
         `INSERT INTO shipments
-           (tenant_id, sales_order_id, batch_number, carrier, tracking_number, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6)
+           (tenant_id, sales_order_id, batch_number, carrier, tracking_number,
+            idempotency_key, creation_request, packing_list_document_set_id,
+            packing_list_version, packing_list_snapshot, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          RETURNING ${SHIPMENT_COLUMNS}`,
         [
           actor.tenantId,
           order.id,
-          dto.batch_number.trim(),
-          dto.carrier.trim(),
-          dto.tracking_number.trim(),
+          creationRequest.batch_number,
+          creationRequest.carrier,
+          creationRequest.tracking_number,
+          dto.idempotency_key,
+          JSON.stringify(creationRequest),
+          dto.packing_list_document_set_id ?? null,
+          dto.packing_list_version ?? null,
+          packingSnapshot ? JSON.stringify(packingSnapshot) : null,
           actor.userId,
         ],
       );
@@ -1063,12 +1509,35 @@ export class FulfillmentService {
           ],
         );
       }
+      for (const box of boxes) {
+        const insertedBox = await client.query<{ id: string }>(
+          `INSERT INTO shipment_boxes
+             (tenant_id, shipment_id, package_no, gross_weight_kg, net_weight_kg, volume_cbm)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+          [
+            actor.tenantId,
+            inserted.rows[0].id,
+            box.package_no.trim(),
+            box.gross_weight_kg,
+            box.net_weight_kg,
+            box.volume_cbm,
+          ],
+        );
+        for (const item of box.items) {
+          await client.query(
+            `INSERT INTO shipment_box_items
+               (tenant_id, shipment_box_id, sales_order_item_id, quantity)
+             VALUES ($1,$2,$3,$4)`,
+            [actor.tenantId, insertedBox.rows[0].id, item.sales_order_item_id, item.quantity],
+          );
+        }
+      }
       const response = await this.shipmentResponse(client, inserted.rows[0]);
       await this.audit.logInTransaction(client, {
         tenantId: actor.tenantId,
         actorType: 'tenant_user',
         actorId: actor.userId,
-        action: 'shipment.created',
+        action: 'shipment.created_from_packing_list',
         resourceType: 'shipment',
         resourceId: inserted.rows[0].id,
         after: response,
@@ -1079,7 +1548,7 @@ export class FulfillmentService {
         order,
         'shipment',
         inserted.rows[0].id,
-        'shipment.created',
+        'shipment.created_from_packing_list',
       );
       await this.syncAggregateStatus(client, order);
       return response;
@@ -1096,6 +1565,9 @@ export class FulfillmentService {
       const shipment = shipmentResult.rows[0];
       if (!shipment) throw new FulfillmentNotFoundException('Shipment not found');
       if (shipment.status !== 'draft') {
+        if (['dispatched', 'in_transit', 'delivered'].includes(shipment.status)) {
+          return this.shipmentResponse(client, shipment, true);
+        }
         throw new FulfillmentConflictException(
           'Only a draft shipment can be dispatched',
           'SHIPMENT_NOT_DISPATCHABLE',
@@ -1129,9 +1601,17 @@ export class FulfillmentService {
       );
       await client.query(
         `INSERT INTO logistics_events
-           (tenant_id, shipment_id, event_type, description, occurred_at, recorded_by)
-         VALUES ($1,$2,'dispatched','Shipment dispatched',$3,$4)`,
-        [actor.tenantId, shipment.id, updated.rows[0].dispatched_at, actor.userId],
+           (tenant_id, shipment_id, event_type, description, occurred_at, recorded_by,
+            idempotency_key, request_json)
+         VALUES ($1,$2,'dispatched','Shipment dispatched',$3,$4,$5,$6)`,
+        [
+          actor.tenantId,
+          shipment.id,
+          updated.rows[0].dispatched_at,
+          actor.userId,
+          `shipment-dispatch:${shipment.id}`,
+          JSON.stringify({ shipment_id: shipment.id, action: 'dispatch' }),
+        ],
       );
       const expenseCount = await client.query<{ count: string }>(
         `SELECT count(*)::text AS count FROM order_expenses WHERE shipment_id = $1`,
@@ -1167,15 +1647,59 @@ export class FulfillmentService {
   async addLogisticsEvent(actor: FulfillmentActor, shipmentId: string, dto: AddLogisticsEventDto) {
     return withTenantContext(this.pool, this.context(actor), async (client) => {
       const order = await this.lockSalesOrderByShipment(client, actor, shipmentId);
+      const requestSnapshot = {
+        shipment_id: shipmentId,
+        event_type: dto.event_type,
+        location: dto.location?.trim() || null,
+        description: dto.description?.trim() || null,
+        occurred_at: dto.occurred_at,
+      };
+      const prior = await client.query<{
+        id: string;
+        shipment_id: string;
+        same: boolean;
+        event_type: string;
+        location: string | null;
+        description: string | null;
+        occurred_at: Date;
+        recorded_by: string;
+        created_at: Date;
+      }>(
+        `SELECT id, shipment_id, request_json = $2::jsonb AS same, event_type, location,
+                description, occurred_at, recorded_by, created_at
+           FROM logistics_events WHERE idempotency_key = $1`,
+        [dto.idempotency_key, JSON.stringify(requestSnapshot)],
+      );
+      if (prior.rows[0]) {
+        if (prior.rows[0].shipment_id !== shipmentId) {
+          throw new FulfillmentConflictException(
+            'Idempotency key was already used for another shipment',
+            'IDEMPOTENCY_KEY_REUSED',
+          );
+        }
+        if (!prior.rows[0].same) {
+          throw new FulfillmentConflictException(
+            'Idempotency key was already used with different logistics input',
+            'IDEMPOTENCY_KEY_PAYLOAD_MISMATCH',
+          );
+        }
+        return { ...prior.rows[0], same: undefined, idempotent: true };
+      }
       const shipment = await client.query<ShipmentRow>(
         `SELECT ${SHIPMENT_COLUMNS} FROM shipments WHERE id = $1 FOR UPDATE`,
         [shipmentId],
       );
       if (!shipment.rows[0]) throw new FulfillmentNotFoundException('Shipment not found');
-      if (shipment.rows[0].status !== 'dispatched') {
+      if (!['dispatched', 'in_transit'].includes(shipment.rows[0].status)) {
         throw new FulfillmentConflictException(
-          'Logistics events can only be added to a dispatched shipment',
+          'Logistics events can only be added to a dispatched or in-transit shipment',
           'SHIPMENT_NOT_TRACKABLE',
+        );
+      }
+      if (dto.event_type === 'in_transit' && shipment.rows[0].status !== 'dispatched') {
+        throw new FulfillmentConflictException(
+          'Only a dispatched shipment can enter in-transit status',
+          'SHIPMENT_NOT_TRANSITABLE',
         );
       }
       if (new Date(dto.occurred_at) < new Date(shipment.rows[0].dispatched_at!)) {
@@ -1186,8 +1710,9 @@ export class FulfillmentService {
       }
       const event = await client.query(
         `INSERT INTO logistics_events
-           (tenant_id, shipment_id, event_type, location, description, occurred_at, recorded_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)
+           (tenant_id, shipment_id, event_type, location, description, occurred_at, recorded_by,
+            idempotency_key, request_json)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          RETURNING id, event_type, location, description, occurred_at, recorded_by, created_at`,
         [
           actor.tenantId,
@@ -1197,8 +1722,29 @@ export class FulfillmentService {
           dto.description?.trim() || null,
           dto.occurred_at,
           actor.userId,
+          dto.idempotency_key,
+          JSON.stringify(requestSnapshot),
         ],
       );
+      if (dto.event_type === 'in_transit') {
+        await client.query(
+          `UPDATE shipments
+              SET status = 'in_transit', in_transit_by = $1, in_transit_at = $2,
+                  updated_at = now()
+            WHERE id = $3`,
+          [actor.userId, dto.occurred_at, shipmentId],
+        );
+        await this.audit.logInTransaction(client, {
+          tenantId: actor.tenantId,
+          actorType: 'tenant_user',
+          actorId: actor.userId,
+          action: 'shipment.in_transit',
+          resourceType: 'shipment',
+          resourceId: shipmentId,
+          before: { status: shipment.rows[0].status },
+          after: { status: 'in_transit', in_transit_at: dto.occurred_at },
+        });
+      }
       await this.audit.logInTransaction(client, {
         tenantId: actor.tenantId,
         actorType: 'tenant_user',
@@ -1216,7 +1762,7 @@ export class FulfillmentService {
         shipmentId,
         `shipment.${dto.event_type}`,
       );
-      return event.rows[0];
+      return { ...event.rows[0], idempotent: false };
     });
   }
 
@@ -1229,45 +1775,89 @@ export class FulfillmentService {
       );
       const current = shipment.rows[0];
       if (!current) throw new FulfillmentNotFoundException('Shipment not found');
-      if (current.status !== 'dispatched') {
+      if (current.status !== 'in_transit') {
         throw new FulfillmentConflictException(
-          'Only a dispatched shipment can be delivered',
+          'Only an in-transit shipment can be delivered',
           'SHIPMENT_NOT_DELIVERABLE',
         );
       }
-      if (new Date(dto.delivered_at) < new Date(current.dispatched_at!)) {
+      if (new Date(dto.delivered_at) < new Date(current.in_transit_at!)) {
         throw new InvalidFulfillmentDataException(
-          'Delivery time cannot precede dispatch',
-          'DELIVERY_BEFORE_DISPATCH',
+          'Delivery time cannot precede in-transit time',
+          'DELIVERY_BEFORE_IN_TRANSIT',
         );
       }
-      const proof = await client.query(
-        `SELECT id FROM files WHERE id = $1 AND deleted_at IS NULL`,
-        [dto.proof_file_id],
-      );
-      if (proof.rows.length === 0) {
+      const fileIds = [...new Set(dto.attachment_file_ids)];
+      if (fileIds.length !== dto.attachment_file_ids.length) {
         throw new InvalidFulfillmentDataException(
-          'Delivery proof file not found in this tenant',
+          'Delivery attachments must be unique',
+          'DUPLICATE_DELIVERY_ATTACHMENT',
+        );
+      }
+      const visibleFiles = await this.files.findManyInScope(
+        client,
+        {
+          userId: actor.userId,
+          tenantId: actor.tenantId,
+          dataScope: await this.fileScope(actor),
+        },
+        fileIds,
+      );
+      if (visibleFiles.length !== fileIds.length) {
+        throw new InvalidFulfillmentDataException(
+          'Delivery attachment not found in caller file scope',
           'DELIVERY_PROOF_NOT_FOUND',
         );
       }
       const updated = await client.query<ShipmentRow>(
         `UPDATE shipments
             SET status = 'delivered', delivered_by = $1, delivered_at = $2,
-                delivery_proof_file_id = $3, delivery_note = $4, updated_at = now()
-          WHERE id = $5 RETURNING ${SHIPMENT_COLUMNS}`,
-        [actor.userId, dto.delivered_at, dto.proof_file_id, dto.note?.trim() || null, current.id],
+                delivery_proof_file_id = $3, delivery_note = $4, received_by_name = $5,
+                delivery_exception_note = $6, updated_at = now()
+          WHERE id = $7 RETURNING ${SHIPMENT_COLUMNS}`,
+        [
+          actor.userId,
+          dto.delivered_at,
+          fileIds[0],
+          dto.note?.trim() || null,
+          dto.received_by.trim(),
+          dto.exception_note?.trim() || null,
+          current.id,
+        ],
       );
+      for (const [index, fileId] of fileIds.entries()) {
+        await client.query(
+          `INSERT INTO shipment_delivery_files
+             (tenant_id, shipment_id, file_id, file_role)
+           VALUES ($1,$2,$3,$4)`,
+          [
+            actor.tenantId,
+            current.id,
+            fileId,
+            index === 0 || !dto.exception_note?.trim() ? 'delivery_proof' : 'exception_evidence',
+          ],
+        );
+      }
       await client.query(
         `INSERT INTO logistics_events
-           (tenant_id, shipment_id, event_type, description, occurred_at, recorded_by)
-         VALUES ($1,$2,'delivered',$3,$4,$5)`,
+           (tenant_id, shipment_id, event_type, description, occurred_at, recorded_by,
+            idempotency_key, request_json)
+         VALUES ($1,$2,'delivered',$3,$4,$5,$6,$7)`,
         [
           actor.tenantId,
           current.id,
           dto.note?.trim() || 'Delivery confirmed',
           dto.delivered_at,
           actor.userId,
+          `shipment-delivered:${current.id}`,
+          JSON.stringify({
+            shipment_id: current.id,
+            delivered_at: dto.delivered_at,
+            received_by: dto.received_by.trim(),
+            attachment_file_ids: fileIds,
+            note: dto.note?.trim() || null,
+            exception_note: dto.exception_note?.trim() || null,
+          }),
         ],
       );
       const response = await this.shipmentResponse(client, updated.rows[0]);
@@ -1282,9 +1872,11 @@ export class FulfillmentService {
         after: {
           status: 'delivered',
           delivered_at: updated.rows[0].delivered_at,
-          delivery_proof_file_id: dto.proof_file_id,
+          received_by: dto.received_by.trim(),
+          attachment_file_ids: fileIds,
+          exception_note: dto.exception_note?.trim() || null,
         },
-        reason: dto.note?.trim() || null,
+        reason: dto.exception_note?.trim() || dto.note?.trim() || null,
       });
       await this.recordEvent(client, actor, order, 'shipment', current.id, 'shipment.delivered');
       await this.syncAggregateStatus(client, order);

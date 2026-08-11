@@ -15,10 +15,11 @@ import {
 } from './dto/order-item.dto';
 import {
   SalesOrderNotFoundException,
-  OrderCustomerNotFoundException,
   DuplicateOrderNumberException,
   OrderRequiresLineItemException,
   PiBackedOrderImmutableException,
+  QuoteBackedOrderDeleteException,
+  FulfillmentLockedOrderImmutableException,
 } from './sales-orders.errors';
 import { SalesOrderRow, SalesOrderResponse, toSalesOrderResponse } from './sales-orders.response';
 import { computeLineTotal, sumMoney, multiplyMoneyByRate } from '../common/order-money';
@@ -28,6 +29,8 @@ import {
   ApprovalScopeException,
   SelfApprovalException,
 } from '../common/order-approval';
+import { assertSalesOrderCustomerInScope } from './sales-order-customer-scope';
+import { RbacService } from '../rbac/rbac.service';
 
 export interface RequestActor {
   userId: string;
@@ -62,35 +65,13 @@ export class SalesOrdersService {
     @Inject(APP_POOL) private readonly pool: Pool,
     private readonly auditService: AuditService,
     private readonly notification: NotificationService,
+    private readonly rbac: RbacService,
   ) {}
 
   // own and assigned both restrict to the caller's owned rows. assigned has no
   // dedicated column in MVP, so it is treated as own (defensive narrowing).
   private restrictsToOwner(dataScope: string): boolean {
     return dataScope === 'own' || dataScope === 'assigned';
-  }
-
-  // Confirms the customer exists, is not deleted, belongs to this tenant (RLS)
-  // and is within the caller's scope. Throws 404 otherwise so existence is not
-  // disclosed. Runs inside the create transaction's client.
-  private async assertCustomerInScope(
-    client: PoolClient,
-    actor: RequestActor,
-    customerId: string,
-  ): Promise<void> {
-    const params: unknown[] = [customerId];
-    let scopeClause = '';
-    if (this.restrictsToOwner(actor.dataScope)) {
-      params.push(actor.userId);
-      scopeClause = ' AND owner_user_id = $2';
-    }
-    const { rows } = await client.query(
-      `SELECT 1 FROM customers WHERE id = $1 AND deleted_at IS NULL${scopeClause}`,
-      params,
-    );
-    if (rows.length === 0) {
-      throw new OrderCustomerNotFoundException();
-    }
   }
 
   // Inserts the given line items for an order in array order, assigning line_no
@@ -110,13 +91,14 @@ export class SalesOrdersService {
       const lineTotal = computeLineTotal(item.quantity, item.unit_price);
       const { rows: inserted } = await client.query<OrderItemRow>(
         `INSERT INTO sales_order_items
-           (tenant_id, order_id, line_no, description, product_code, unit,
+           (tenant_id, order_id, product_id, line_no, description, product_code, unit,
             quantity, unit_price, line_total, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
         [
           actor.tenantId,
           orderId,
+          item.product_id ?? null,
           lineNo,
           item.description,
           item.product_code ?? null,
@@ -130,6 +112,40 @@ export class SalesOrdersService {
       rows.push(inserted[0]);
     }
     return rows;
+  }
+
+  private async assertProductsInScope(
+    client: PoolClient,
+    actor: RequestActor,
+    items: OrderItemInputDto[],
+  ): Promise<void> {
+    const productIds = items
+      .map((item) => item.product_id)
+      .filter((id): id is string => Boolean(id));
+    if (productIds.length === 0) return;
+    const permission = await this.rbac.checkPermission(
+      actor.userId,
+      actor.tenantId,
+      'products:view',
+    );
+    if (!permission.allowed) {
+      throw new SalesOrderNotFoundException();
+    }
+    const params: unknown[] = [productIds];
+    let scope = '';
+    if (permission.dataScope === 'own' || permission.dataScope === 'assigned') {
+      params.push(actor.userId);
+      scope = ` AND owner_user_id=$${params.length}`;
+    } else if (permission.dataScope !== 'all') {
+      scope = ' AND false';
+    }
+    const products = await client.query<{ id: string }>(
+      `SELECT id FROM products WHERE id=ANY($1::uuid[]) AND active=true${scope}`,
+      params,
+    );
+    if (products.rows.length !== new Set(productIds).size) {
+      throw new SalesOrderNotFoundException();
+    }
   }
 
   // Reads the tenant's base (reporting) currency from the existing key-value
@@ -209,7 +225,8 @@ export class SalesOrdersService {
         this.pool,
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
-          await this.assertCustomerInScope(client, actor, dto.customer_id);
+          await assertSalesOrderCustomerInScope(client, actor, dto.customer_id);
+          await this.assertProductsInScope(client, actor, items);
           const { rows } = await client.query<SalesOrderRow>(
             `INSERT INTO sales_orders
                (tenant_id, customer_id, owner_user_id, order_number, pi_number, pi_file_id,
@@ -385,6 +402,9 @@ export class SalesOrdersService {
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
         if (existing.source_pi_id) throw new PiBackedOrderImmutableException();
+        if (existing.fulfillment_locked_snapshot) {
+          throw new FulfillmentLockedOrderImmutableException();
+        }
         const existingItems = await this.fetchItems(client, existing.id);
 
         // Determine the resulting status to enforce the line-item rule against
@@ -417,6 +437,7 @@ export class SalesOrdersService {
         // are absent, the existing lines stand unchanged.
         let resultingItems: OrderItemRow[];
         if (replacingItems) {
+          await this.assertProductsInScope(client, actor, dto.items!);
           await client.query(
             `UPDATE sales_order_items SET deleted_at = now(), updated_at = now()
              WHERE order_id = $1 AND deleted_at IS NULL`,
@@ -496,6 +517,10 @@ export class SalesOrdersService {
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
         if (existing.source_pi_id) throw new PiBackedOrderImmutableException();
+        if (existing.source_document_set_id) throw new QuoteBackedOrderDeleteException();
+        if (existing.fulfillment_locked_snapshot) {
+          throw new FulfillmentLockedOrderImmutableException();
+        }
         // Soft delete: set deleted_at, bump updated_at, leave status unchanged.
         const { rows } = await client.query<SalesOrderRow>(
           `UPDATE sales_orders SET deleted_at = now(), updated_at = now()

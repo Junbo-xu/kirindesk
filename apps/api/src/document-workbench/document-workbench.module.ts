@@ -8,6 +8,7 @@ import {
   DocumentLinksController,
   DocumentSetsController,
   PublicDocumentsController,
+  SalesOrderFulfillmentBridgeController,
 } from './document-sets.controller';
 import { DocumentSetsService } from './document-sets.service';
 import { DOCUMENT_PDF_RENDERER, PuppeteerDocumentPdfRenderer } from './document-pdf.renderer';
@@ -21,6 +22,7 @@ import { ProductsService } from './products.service';
     ProductsController,
     ProductFieldsController,
     DocumentSetsController,
+    SalesOrderFulfillmentBridgeController,
     DocumentLinksController,
   ],
   providers: [

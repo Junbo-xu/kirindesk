@@ -1,7 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
-import { ApiError, Currency, FulfillmentOrder, GoodsReceipt, OrderExpense } from '../lib/types';
+import {
+  ApiError,
+  CreateShipmentInput,
+  Currency,
+  FulfillmentOrder,
+  GoodsReceipt,
+  OrderExpense,
+} from '../lib/types';
 
 const card = {
   border: '1px solid #dbe3ee',
@@ -14,6 +21,20 @@ const card = {
 function errorMessage(error: unknown): string {
   return error instanceof ApiError || error instanceof Error ? error.message : '操作失败';
 }
+
+function shouldRetainOperation(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  return [408, 425, 429].includes(error.status) || error.status >= 500;
+}
+
+type ShipmentOperation = {
+  orderId: string;
+  input: CreateShipmentInput;
+};
+
+type TransitOperation = Parameters<typeof apiClient.addLogisticsEvent>[1];
+
+type RunResult = { ok: true } | { ok: false; error: unknown };
 
 export function FulfillmentPage() {
   const { hasPermission } = useAuth();
@@ -37,6 +58,13 @@ export function FulfillmentPage() {
   const [shipmentBatch, setShipmentBatch] = useState('');
   const [shipmentItemId, setShipmentItemId] = useState('');
   const [shipmentQuantity, setShipmentQuantity] = useState('');
+  const [shipmentPackageNo, setShipmentPackageNo] = useState('');
+  const [shipmentGrossWeight, setShipmentGrossWeight] = useState('');
+  const [shipmentNetWeight, setShipmentNetWeight] = useState('');
+  const [shipmentVolume, setShipmentVolume] = useState('');
+  const [shipmentPackageQuantities, setShipmentPackageQuantities] = useState<
+    Record<string, string>
+  >({});
   const [carrier, setCarrier] = useState('');
   const [trackingNumber, setTrackingNumber] = useState('');
   const [expenseShipmentId, setExpenseShipmentId] = useState('');
@@ -50,12 +78,24 @@ export function FulfillmentPage() {
   const [completionFxSource, setCompletionFxSource] = useState('');
   const [completionFxTime, setCompletionFxTime] = useState('');
   const [deliveryFiles, setDeliveryFiles] = useState<Record<string, File | null>>({});
+  const [deliveryRecipients, setDeliveryRecipients] = useState<Record<string, string>>({});
+  const [deliveryNotes, setDeliveryNotes] = useState<Record<string, string>>({});
+  const [deliveryExceptions, setDeliveryExceptions] = useState<Record<string, string>>({});
   const [paymentReceiptIds, setPaymentReceiptIds] = useState<Record<string, string>>({});
+  const shipmentOperationRef = useRef<ShipmentOperation | null>(null);
+  const transitOperationRef = useRef<Record<string, TransitOperation>>({});
 
   const purchaseOrder = flow?.purchase_orders.find((row) => row.id === purchaseOrderId) ?? null;
   const shippableItems = useMemo(
     () => flow?.items.filter((item) => Number(item.available_quantity) > 0) ?? [],
     [flow],
+  );
+  const selectedPackingPackage = useMemo(
+    () =>
+      flow?.packing_list_source?.packages.find(
+        (sourcePackage) => sourcePackage.package_no === shipmentPackageNo,
+      ) ?? null,
+    [flow, shipmentPackageNo],
   );
 
   async function loadOrder(id: string) {
@@ -66,7 +106,17 @@ export function FulfillmentPage() {
     const next = await apiClient.getFulfillmentOrder(id);
     setFlow(next);
     setPurchaseOrderId((current) => current || next.purchase_orders[0]?.id || '');
-    setShipmentItemId((current) => current || next.items[0]?.id || '');
+    const firstPackage = next.packing_list_source?.packages[0];
+    setShipmentPackageNo(firstPackage?.package_no ?? '');
+    setShipmentNetWeight(firstPackage?.net_weight_kg ?? '');
+    setShipmentVolume(firstPackage?.volume_cbm ?? '');
+    setShipmentPackageQuantities(
+      Object.fromEntries(
+        (firstPackage?.items ?? []).map((item) => [item.sales_order_item_id, item.quantity]),
+      ),
+    );
+    setShipmentItemId(firstPackage?.items[0]?.sales_order_item_id ?? next.items[0]?.id ?? '');
+    setShipmentQuantity(firstPackage?.items[0]?.quantity ?? '');
     setQcDrafts((current) => {
       const copy = { ...current };
       for (const receipt of next.goods_receipts) {
@@ -84,7 +134,7 @@ export function FulfillmentPage() {
   async function loadInitial() {
     const listed = await apiClient.listSalesOrders({ pageSize: 100 });
     const relevant = listed.data.filter((order) =>
-      ['procurement', 'fulfillment', 'delivered'].includes(order.status),
+      ['approved', 'procurement', 'fulfillment', 'delivered'].includes(order.status),
     );
     setOrders(relevant);
     const nextId = orderId || relevant[0]?.id || '';
@@ -100,14 +150,20 @@ export function FulfillmentPage() {
     setPurchaseItemId(purchaseOrder?.items[0]?.id ?? '');
   }, [purchaseOrderId, flow]);
 
-  async function run(action: () => Promise<unknown>) {
+  async function run(action: () => Promise<unknown>): Promise<RunResult> {
     setBusy(true);
     setError(null);
     try {
       await action();
-      await loadOrder(orderId);
+      try {
+        await loadOrder(orderId);
+      } catch (caught) {
+        setError(`操作已完成，但刷新失败：${errorMessage(caught)}`);
+      }
+      return { ok: true };
     } catch (caught) {
       setError(errorMessage(caught));
+      return { ok: false, error: caught };
     } finally {
       setBusy(false);
     }
@@ -145,17 +201,75 @@ export function FulfillmentPage() {
 
   async function createShipment(event: FormEvent) {
     event.preventDefault();
-    await run(async () => {
-      await apiClient.createShipment(orderId, {
-        batch_number: shipmentBatch,
-        carrier,
-        tracking_number: trackingNumber,
-        items: [{ sales_order_item_id: shipmentItemId, quantity: shipmentQuantity }],
-      });
-      setShipmentBatch('');
-      setShipmentQuantity('');
-      setTrackingNumber('');
-    });
+    const operation =
+      shipmentOperationRef.current ??
+      ({
+        orderId,
+        input: {
+          idempotency_key: `shipment:${orderId}:${crypto.randomUUID()}`,
+          batch_number: shipmentBatch,
+          carrier,
+          tracking_number: trackingNumber,
+          packing_list_document_set_id: flow?.packing_list_source?.document_set_id,
+          packing_list_version: flow?.packing_list_source?.version,
+          boxes: [
+            {
+              package_no: shipmentPackageNo,
+              gross_weight_kg: shipmentGrossWeight,
+              net_weight_kg: shipmentNetWeight,
+              volume_cbm: shipmentVolume,
+              items: selectedPackingPackage?.items.map((item) => ({
+                sales_order_item_id: item.sales_order_item_id,
+                quantity: shipmentPackageQuantities[item.sales_order_item_id] ?? item.quantity,
+              })) ?? [{ sales_order_item_id: shipmentItemId, quantity: shipmentQuantity }],
+            },
+          ],
+        },
+      } satisfies ShipmentOperation);
+    shipmentOperationRef.current = operation;
+    const result = await run(() => apiClient.createShipment(operation.orderId, operation.input));
+    if (result.ok) {
+      resetShipmentForm();
+    } else if (!shouldRetainOperation(result.error)) {
+      shipmentOperationRef.current = null;
+    }
+  }
+
+  function resetShipmentForm() {
+    shipmentOperationRef.current = null;
+    const firstPackage = flow?.packing_list_source?.packages[0];
+    setShipmentBatch('');
+    setShipmentPackageNo(firstPackage?.package_no ?? '');
+    setShipmentItemId(firstPackage?.items[0]?.sales_order_item_id ?? flow?.items[0]?.id ?? '');
+    setShipmentQuantity(firstPackage?.items[0]?.quantity ?? '');
+    setShipmentGrossWeight('');
+    setShipmentNetWeight(firstPackage?.net_weight_kg ?? '');
+    setShipmentVolume(firstPackage?.volume_cbm ?? '');
+    setShipmentPackageQuantities(
+      Object.fromEntries(
+        (firstPackage?.items ?? []).map((item) => [item.sales_order_item_id, item.quantity]),
+      ),
+    );
+    setTrackingNumber('');
+  }
+
+  function selectPackingPackage(packageNo: string) {
+    const sourcePackage = flow?.packing_list_source?.packages.find(
+      (candidate) => candidate.package_no === packageNo,
+    );
+    setShipmentPackageNo(packageNo);
+    setShipmentNetWeight(sourcePackage?.net_weight_kg ?? '');
+    setShipmentVolume(sourcePackage?.volume_cbm ?? '');
+    setShipmentGrossWeight('');
+    if (sourcePackage?.items.length === 1) {
+      setShipmentItemId(sourcePackage.items[0].sales_order_item_id);
+      setShipmentQuantity(sourcePackage.items[0].quantity);
+    }
+    setShipmentPackageQuantities(
+      Object.fromEntries(
+        (sourcePackage?.items ?? []).map((item) => [item.sales_order_item_id, item.quantity]),
+      ),
+    );
   }
 
   async function recordExpense(event: FormEvent) {
@@ -184,26 +298,50 @@ export function FulfillmentPage() {
     );
   }
 
+  async function recordTransit(shipmentId: string) {
+    const operation =
+      transitOperationRef.current[shipmentId] ??
+      ({
+        idempotency_key: `shipment-transit:${shipmentId}:${crypto.randomUUID()}`,
+        event_type: 'in_transit',
+        description: '人工更新运输中',
+        occurred_at: new Date().toISOString(),
+      } satisfies TransitOperation);
+    transitOperationRef.current[shipmentId] = operation;
+    const result = await run(() => apiClient.addLogisticsEvent(shipmentId, operation));
+    if (result.ok || !shouldRetainOperation(result.error)) {
+      delete transitOperationRef.current[shipmentId];
+    }
+  }
+
   async function deliver(shipmentId: string) {
     const file = deliveryFiles[shipmentId];
     if (!file) {
       setError('签收必须上传凭证');
       return;
     }
+    const receivedBy = deliveryRecipients[shipmentId]?.trim();
+    if (!receivedBy) {
+      setError('签收必须记录实际签收人');
+      return;
+    }
     await run(async () => {
       const uploaded = await apiClient.uploadFile(file, 'delivery_proof');
       await apiClient.deliverShipment(shipmentId, {
         delivered_at: new Date().toISOString(),
-        proof_file_id: uploaded.id,
+        received_by: receivedBy,
+        attachment_file_ids: [uploaded.id],
+        note: deliveryNotes[shipmentId]?.trim() || undefined,
+        exception_note: deliveryExceptions[shipmentId]?.trim() || undefined,
       });
     });
   }
 
   return (
     <section style={{ maxWidth: 1180 }}>
-      <h1 style={{ fontSize: 24, marginTop: 0 }}>到货、QC、发货与签收</h1>
+      <h1 style={{ fontSize: 24, marginTop: 0 }}>到货、QC、装箱发货与签收</h1>
       <p style={{ color: '#64748b' }}>
-        可发数量仅来自已通过 QC 且完成配置确认的到货；签收和收款里程碑独立推进。
+        箱号、数量、毛净重和体积形成不可变发货快照；签收和收款里程碑独立推进。
       </p>
       {error && (
         <p role="alert" style={{ color: 'crimson' }}>
@@ -217,6 +355,8 @@ export function FulfillmentPage() {
             aria-label="履约订单"
             value={orderId}
             onChange={(event) => {
+              shipmentOperationRef.current = null;
+              transitOperationRef.current = {};
               setOrderId(event.target.value);
               void loadOrder(event.target.value).catch((caught) => setError(errorMessage(caught)));
             }}
@@ -437,28 +577,106 @@ export function FulfillmentPage() {
             <form style={card} onSubmit={createShipment}>
               <h2 style={{ marginTop: 0, fontSize: 18 }}>创建发货批次</h2>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <select
-                  aria-label="发货订单行"
-                  value={shipmentItemId}
-                  onChange={(event) => setShipmentItemId(event.target.value)}
-                >
-                  {shippableItems.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.description} · 可发 {item.available_quantity}
-                    </option>
-                  ))}
-                </select>
+                {selectedPackingPackage ? (
+                  <div style={{ display: 'grid', gap: 6, minWidth: 260 }}>
+                    {selectedPackingPackage.items.map((packageItem, index) => {
+                      const orderItem = flow.items.find(
+                        (item) => item.id === packageItem.sales_order_item_id,
+                      );
+                      const label =
+                        index === 0
+                          ? '发货数量'
+                          : `装箱数量 ${orderItem?.description ?? packageItem.sales_order_item_id}`;
+                      return (
+                        <label key={packageItem.sales_order_item_id}>
+                          {orderItem?.description ?? packageItem.sales_order_item_id} · 可发{' '}
+                          {orderItem?.available_quantity ?? '-'}
+                          <input
+                            aria-label={label}
+                            required
+                            value={shipmentPackageQuantities[packageItem.sales_order_item_id] ?? ''}
+                            onChange={(event) => {
+                              const quantity = event.target.value;
+                              setShipmentPackageQuantities((current) => ({
+                                ...current,
+                                [packageItem.sales_order_item_id]: quantity,
+                              }));
+                              if (index === 0) setShipmentQuantity(quantity);
+                            }}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <select
+                    aria-label="发货订单行"
+                    value={shipmentItemId}
+                    onChange={(event) => setShipmentItemId(event.target.value)}
+                  >
+                    {shippableItems.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.description} · 可发 {item.available_quantity}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <input
                   aria-label="发货批次"
                   required
                   value={shipmentBatch}
                   onChange={(event) => setShipmentBatch(event.target.value)}
                 />
+                {!selectedPackingPackage && (
+                  <input
+                    aria-label="发货数量"
+                    required
+                    value={shipmentQuantity}
+                    onChange={(event) => setShipmentQuantity(event.target.value)}
+                  />
+                )}
+                {flow.packing_list_source?.packages.length ? (
+                  <select
+                    aria-label="装箱单箱号"
+                    required
+                    value={shipmentPackageNo}
+                    onChange={(event) => selectPackingPackage(event.target.value)}
+                  >
+                    {flow.packing_list_source.packages.map((sourcePackage, index) => (
+                      <option
+                        key={`${sourcePackage.package_no}-${index}`}
+                        value={sourcePackage.package_no}
+                      >
+                        {sourcePackage.package_no} · 净重 {sourcePackage.net_weight_kg ?? '-'} kg ·{' '}
+                        {sourcePackage.volume_cbm ?? '-'} CBM
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    aria-label="箱号"
+                    required
+                    value={shipmentPackageNo}
+                    onChange={(event) => setShipmentPackageNo(event.target.value)}
+                  />
+                )}
                 <input
-                  aria-label="发货数量"
+                  aria-label="毛重 kg"
                   required
-                  value={shipmentQuantity}
-                  onChange={(event) => setShipmentQuantity(event.target.value)}
+                  value={shipmentGrossWeight}
+                  onChange={(event) => setShipmentGrossWeight(event.target.value)}
+                />
+                <input
+                  aria-label="净重 kg"
+                  required
+                  value={shipmentNetWeight}
+                  onChange={(event) => setShipmentNetWeight(event.target.value)}
+                />
+                <input
+                  aria-label="体积 CBM"
+                  required
+                  value={shipmentVolume}
+                  onChange={(event) => setShipmentVolume(event.target.value)}
                 />
                 <input
                   aria-label="承运方"
@@ -473,6 +691,9 @@ export function FulfillmentPage() {
                   onChange={(event) => setTrackingNumber(event.target.value)}
                 />
                 <button disabled={busy || !shipmentItemId}>创建发货</button>
+                <button type="button" disabled={busy} onClick={resetShipmentForm}>
+                  重置发货表单
+                </button>
               </div>
             </form>
           )}
@@ -595,22 +816,54 @@ export function FulfillmentPage() {
                     确认发货
                   </button>
                 )}
+                {shipment.boxes.map((box) => (
+                  <div key={box.id} style={{ marginTop: 6, color: '#475569' }}>
+                    箱号 {box.package_no} · 毛重 {box.gross_weight_kg} kg · 净重 {box.net_weight_kg}{' '}
+                    kg · {box.volume_cbm} CBM
+                  </div>
+                ))}
                 {shipment.status === 'dispatched' && hasPermission('shipments:manage') && (
                   <div style={{ marginTop: 8 }}>
-                    <button
-                      disabled={busy}
-                      onClick={() =>
-                        void run(() =>
-                          apiClient.addLogisticsEvent(shipment.id, {
-                            event_type: 'in_transit',
-                            description: '人工更新运输中',
-                            occurred_at: new Date().toISOString(),
-                          }),
-                        )
-                      }
-                    >
+                    <button disabled={busy} onClick={() => void recordTransit(shipment.id)}>
                       记录运输中
-                    </button>{' '}
+                    </button>
+                  </div>
+                )}
+                {shipment.status === 'in_transit' && hasPermission('shipments:manage') && (
+                  <div style={{ marginTop: 8 }}>
+                    <input
+                      aria-label={`签收人 ${shipment.batch_number}`}
+                      placeholder="实际签收人"
+                      value={deliveryRecipients[shipment.id] ?? ''}
+                      onChange={(event) =>
+                        setDeliveryRecipients((current) => ({
+                          ...current,
+                          [shipment.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <input
+                      aria-label={`签收备注 ${shipment.batch_number}`}
+                      placeholder="签收备注"
+                      value={deliveryNotes[shipment.id] ?? ''}
+                      onChange={(event) =>
+                        setDeliveryNotes((current) => ({
+                          ...current,
+                          [shipment.id]: event.target.value,
+                        }))
+                      }
+                    />
+                    <input
+                      aria-label={`签收异常 ${shipment.batch_number}`}
+                      placeholder="异常备注（可选）"
+                      value={deliveryExceptions[shipment.id] ?? ''}
+                      onChange={(event) =>
+                        setDeliveryExceptions((current) => ({
+                          ...current,
+                          [shipment.id]: event.target.value,
+                        }))
+                      }
+                    />
                     <input
                       aria-label={`签收凭证 ${shipment.batch_number}`}
                       type="file"
@@ -625,6 +878,14 @@ export function FulfillmentPage() {
                     <button disabled={busy} onClick={() => void deliver(shipment.id)}>
                       确认签收
                     </button>
+                  </div>
+                )}
+                {shipment.status === 'delivered' && (
+                  <div style={{ marginTop: 8 }}>
+                    签收人：{shipment.received_by_name} · 附件 {shipment.delivery_files.length} 个
+                    {shipment.delivery_exception_note
+                      ? ` · 异常：${shipment.delivery_exception_note}`
+                      : ''}
                   </div>
                 )}
                 {shipment.status !== 'draft' && hasPermission('shipments:manage') && (

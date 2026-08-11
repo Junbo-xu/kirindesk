@@ -20,9 +20,13 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { DocumentSetsService } from './document-sets.service';
 import {
+  ConvertDocumentSetToSalesOrderDto,
   CreateDocumentSetDto,
   CreateShareLinkDto,
+  GenerateSalesOrderPurchaseOrdersDto,
   ListDocumentSetsQuery,
+  LockSalesOrderForFulfillmentDto,
+  SyncSalesOrderDocumentsDto,
   UpdateDocumentSetDto,
 } from './dto/document-set.dto';
 import { DocumentWorkbenchActor } from './products.service';
@@ -100,6 +104,18 @@ export class DocumentSetsController extends DocumentControllerBase {
     return this.documents.lock(this.actor(user, request), id);
   }
 
+  @Post(':id/sales-order')
+  @RequirePermission('orders', 'create')
+  @HttpCode(200)
+  convertToSalesOrder(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() request: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConvertDocumentSetToSalesOrderDto,
+  ) {
+    return this.documents.convertToSalesOrder(this.actor(user, request), id, dto);
+  }
+
   @Post(':id/exports/:documentType')
   @RequirePermission('document_sets', 'export')
   export(
@@ -129,6 +145,50 @@ export class DocumentSetsController extends DocumentControllerBase {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.documents.listLinks(this.actor(user, request), id);
+  }
+}
+
+@Controller('api/sales-orders')
+@UseGuards(TenantAuthGuard, PermissionGuard)
+export class SalesOrderFulfillmentBridgeController extends DocumentControllerBase {
+  constructor(private readonly documents: DocumentSetsService) {
+    super();
+  }
+
+  @Post(':id/fulfillment-lock')
+  @RequirePermission('orders', 'update')
+  @HttpCode(200)
+  lockForFulfillment(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() request: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LockSalesOrderForFulfillmentDto,
+  ) {
+    return this.documents.lockSalesOrderForFulfillment(this.actor(user, request), id, dto);
+  }
+
+  @Post(':id/document-set')
+  @RequirePermission('document_sets', 'manage')
+  @HttpCode(200)
+  syncDocuments(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() request: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SyncSalesOrderDocumentsDto,
+  ) {
+    return this.documents.syncSalesOrderDocuments(this.actor(user, request), id, dto);
+  }
+
+  @Post(':id/purchase-orders/generate')
+  @RequirePermission('procurement', 'create')
+  @HttpCode(200)
+  generatePurchaseOrders(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() request: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: GenerateSalesOrderPurchaseOrdersDto,
+  ) {
+    return this.documents.generatePurchaseOrders(this.actor(user, request), id, dto);
   }
 }
 

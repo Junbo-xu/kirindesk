@@ -315,18 +315,41 @@ export interface Shipment {
   id: string;
   sales_order_id: string;
   batch_number: string;
-  status: 'draft' | 'dispatched' | 'delivered';
+  status: 'draft' | 'dispatched' | 'in_transit' | 'delivered';
   carrier: string;
   tracking_number: string;
   dispatched_at: string | null;
+  in_transit_at: string | null;
   delivered_at: string | null;
   delivery_proof_file_id: string | null;
   delivery_note: string | null;
+  received_by_name: string | null;
+  delivery_exception_note: string | null;
+  packing_list_document_set_id: string | null;
+  packing_list_version: number | null;
+  idempotent: boolean;
   items: Array<{
     id: string;
     sales_order_item_id: string;
     quantity: string;
     available_quantity_snapshot: string;
+  }>;
+  boxes: Array<{
+    id: string;
+    package_no: string;
+    gross_weight_kg: string;
+    net_weight_kg: string;
+    volume_cbm: string;
+    items: Array<{
+      id: string;
+      sales_order_item_id: string;
+      quantity: string;
+    }>;
+  }>;
+  delivery_files: Array<{
+    file_id: string;
+    file_role: 'delivery_proof' | 'exception_evidence';
+    created_at: string;
   }>;
   logistics_events: Array<{
     id: string;
@@ -367,6 +390,22 @@ export interface FulfillmentOrder {
   currency: Currency;
   aggregate_status: string;
   settings: FulfillmentSettings;
+  packing_list_source: {
+    document_set_id: string;
+    version: number;
+    source_order_locked: boolean;
+    packages: Array<{
+      package_no: string;
+      net_weight_kg: string | null;
+      volume_cbm: string | null;
+      items: Array<{
+        sales_order_item_id: string;
+        quantity: string;
+        weight_kg: string | null;
+        volume_cbm: string | null;
+      }>;
+    }>;
+  } | null;
   items: FulfillmentOrderItem[];
   purchase_orders: FulfillmentPurchaseOrder[];
   goods_receipts: GoodsReceipt[];
@@ -383,10 +422,20 @@ export interface CreateGoodsReceiptInput {
 }
 
 export interface CreateShipmentInput {
+  idempotency_key: string;
   batch_number: string;
   carrier: string;
   tracking_number: string;
-  items: Array<{ sales_order_item_id: string; quantity: string }>;
+  packing_list_document_set_id?: string;
+  packing_list_version?: number;
+  boxes?: Array<{
+    package_no: string;
+    gross_weight_kg: string;
+    net_weight_kg: string;
+    volume_cbm: string;
+    items: Array<{ sales_order_item_id: string; quantity: string }>;
+  }>;
+  items?: Array<{ sales_order_item_id: string; quantity: string }>;
 }
 
 export interface CompleteExpenseFxInput {
@@ -491,6 +540,7 @@ export interface BaseCurrencyResponse {
 // A line item as sent to the API. line_no and line_total are derived
 // server-side, so they are not part of the input.
 export interface OrderItemInput {
+  product_id?: string;
   description: string;
   product_code?: string;
   unit?: string;
@@ -502,6 +552,8 @@ export interface OrderItemInput {
 // A persisted line item returned by the API (single-order responses).
 export interface OrderItemResponse {
   id: string;
+  product_id: string | null;
+  source_document_line_id: string | null;
   line_no: number;
   description: string;
   product_code: string | null;
@@ -518,6 +570,11 @@ export interface SalesOrderResponse {
   owner_user_id: string;
   order_number: string;
   pi_number: string | null;
+  source_document_set_id: string | null;
+  source_quote_number: string | null;
+  source_quote_version: number | null;
+  fulfillment_locked_by: string | null;
+  fulfillment_locked_at: string | null;
   currency: Currency;
   total_amount: string;
   status: OrderStatus;
@@ -531,6 +588,59 @@ export interface SalesOrderResponse {
   updated_at: string;
   // Present on single-order responses (getOne/create/update), not in list rows.
   items?: OrderItemResponse[];
+}
+
+export interface QuoteToSalesOrderResult {
+  sales_order: SalesOrderResponse;
+  source_quote: {
+    document_set_id: string;
+    quote_number: string;
+    version: number;
+  };
+  idempotent: boolean;
+}
+
+export interface SalesOrderDocumentSyncResult {
+  document: TradeDocumentSet;
+  document_types: Array<'pi' | 'sc' | 'ci' | 'pl'>;
+  source_order: {
+    sales_order_id: string;
+    updated_at: string;
+    locked: boolean;
+  };
+  result_document_version: number;
+  idempotent: boolean;
+  refreshed: boolean;
+  preserved_export_count: number;
+}
+
+export interface GeneratedPurchaseOrderResult {
+  generation_id: string;
+  purchase_orders: Array<{
+    id: string;
+    supplier_id: string;
+    owner_user_id: string;
+    order_number: string;
+    currency: Currency;
+    total_amount: string;
+    status: OrderStatus;
+    source_sales_order_generation_id: string;
+    created_at: string;
+    updated_at: string;
+    items: Array<{
+      id: string;
+      product_id: string | null;
+      source_sales_order_item_id: string;
+      line_no: number;
+      description: string;
+      product_code: string | null;
+      unit: string | null;
+      quantity: string;
+      unit_price: string;
+      line_total: string;
+    }>;
+  }>;
+  idempotent: boolean;
 }
 
 export interface Paginated<T> {
@@ -590,6 +700,8 @@ export interface PurchaseOrderResponse {
   fx_rate_source: string | null;
   fx_captured_at: string | null;
   total_amount_base: string | null;
+  source_procurement_request_id: string | null;
+  source_sales_order_generation_id: string | null;
   created_at: string;
   updated_at: string;
   // Present on single-order responses (getOne/create/update), not in list rows.
@@ -1766,6 +1878,9 @@ export interface ProductRecord {
   default_currency: string;
   default_unit_price: string;
   cost_unit_price?: string | null;
+  supplier_id?: string | null;
+  purchase_currency?: Currency | null;
+  purchase_unit_price?: string | null;
   weight_kg: string | null;
   volume_cbm: string | null;
   thumbnail_file_id: string | null;
@@ -1784,6 +1899,9 @@ export interface ProductInput {
   default_currency: string;
   default_unit_price: string;
   cost_unit_price?: string;
+  supplier_id?: string;
+  purchase_currency?: Currency;
+  purchase_unit_price?: string;
   weight_kg?: string;
   volume_cbm?: string;
   thumbnail_file_id?: string;
@@ -1964,6 +2082,98 @@ export interface PublicTradeDocument {
   document: TradeDocumentSet;
   confirmed_at: string | null;
   download_path: string;
+}
+
+export interface CustomsDeclarationInput {
+  idempotency_key: string;
+  port: string;
+  trade_mode: string;
+  package_type: string;
+  gross_weight_kg: string;
+  consignor_name: string;
+  consignor_uscc: string;
+  consignor_contact: string;
+  consignor_phone: string;
+  customs_broker_name: string;
+  customs_broker_uscc: string;
+  customs_broker_contact: string;
+  customs_broker_phone: string;
+  authorization_matters: string[];
+}
+
+export interface CustomsDeclarationLine {
+  line_no: number;
+  sales_order_item_id: string;
+  product_code: string;
+  description: string;
+  hs_code: string;
+  declaration_elements: string;
+  quantity: string;
+  unit: string;
+  unit_price: string;
+  line_total: string;
+  currency: string;
+  package_no: string;
+  net_weight_kg: string;
+}
+
+export interface CustomsDeclarationData {
+  declaration_number: string;
+  sales_order_id: string;
+  order_number: string;
+  port: string;
+  trade_mode: string;
+  package_type: string;
+  package_count: number;
+  gross_weight_kg: string;
+  net_weight_kg: string;
+  currency: string;
+  total_amount: string;
+  consignor: { name: string; uscc: string; contact: string; phone: string };
+  customs_broker: { name: string; uscc: string; contact: string; phone: string };
+  authorization_matters: string[];
+  lines: CustomsDeclarationLine[];
+}
+
+export interface CustomsDeclarationVersion {
+  id: string;
+  declaration_set_id: string;
+  version: number;
+  source_ci_export_id: string;
+  source_pl_export_id: string;
+  source_fingerprint: string;
+  pre_entry_file_id: string;
+  authorization_file_id: string;
+  generated_by: string;
+  generated_at: string;
+  customs_data: CustomsDeclarationData;
+  consistency: { valid: true; missing: []; conflicts: [] };
+}
+
+export interface CustomsDeclaration {
+  id: string;
+  sales_order_id: string;
+  owner_user_id: string;
+  status: 'draft' | 'generated';
+  draft_revision: number;
+  latest_version: number;
+  source: {
+    order_locked_at: string;
+    ci: { export_id: string; source_version: number; export_version: number; file_id: string };
+    pl: { export_id: string; source_version: number; export_version: number; file_id: string };
+    fingerprint: string;
+  };
+  customs_data: CustomsDeclarationData;
+  versions: CustomsDeclarationVersion[];
+  created_by: string;
+  refreshed_by: string | null;
+  refreshed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomsDeclarationList {
+  data: CustomsDeclaration[];
 }
 
 // Normalized API error thrown by the client for non-2xx responses.

@@ -46,6 +46,9 @@ import {
   SalesOrderResponse,
   SupplierResponse,
   PurchaseOrderResponse,
+  QuoteToSalesOrderResult,
+  SalesOrderDocumentSyncResult,
+  GeneratedPurchaseOrderResult,
   UpdateCommissionTableInput,
   UpdateCustomerInput,
   UpdateSalesOrderInput,
@@ -115,6 +118,10 @@ import {
   TradeDocumentLink,
   TradeDocumentSet,
   TradeDocumentType,
+  CustomsDeclaration,
+  CustomsDeclarationList,
+  CustomsDeclarationInput,
+  CustomsDeclarationVersion,
 } from './types';
 
 const TOKEN_KEY = 'kd_access_token';
@@ -519,6 +526,7 @@ export const apiClient = {
   addLogisticsEvent(
     shipmentId: string,
     input: {
+      idempotency_key: string;
       event_type: 'in_transit' | 'customs' | 'exception';
       location?: string;
       description?: string;
@@ -532,7 +540,13 @@ export const apiClient = {
   },
   deliverShipment(
     shipmentId: string,
-    input: { delivered_at: string; proof_file_id: string; note?: string },
+    input: {
+      delivered_at: string;
+      received_by: string;
+      attachment_file_ids: string[];
+      note?: string;
+      exception_note?: string;
+    },
   ): Promise<Shipment> {
     return request<Shipment>(`/api/shipments/${shipmentId}/deliver`, {
       method: 'POST',
@@ -650,6 +664,92 @@ export const apiClient = {
     return request<{ id: string; deleted: true }>(`/api/sales-orders/${id}`, {
       method: 'DELETE',
     });
+  },
+  lockSalesOrderForFulfillment(
+    id: string,
+    expectedUpdatedAt: string,
+  ): Promise<{ sales_order: SalesOrderResponse; idempotent: boolean }> {
+    return request(`/api/sales-orders/${id}/fulfillment-lock`, {
+      method: 'POST',
+      body: { expected_updated_at: expectedUpdatedAt },
+    });
+  },
+  syncSalesOrderDocuments(
+    id: string,
+    input: { idempotency_key: string; expected_updated_at: string },
+  ): Promise<SalesOrderDocumentSyncResult> {
+    return request<SalesOrderDocumentSyncResult>(`/api/sales-orders/${id}/document-set`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  generateSalesOrderPurchaseOrders(
+    id: string,
+    idempotencyKey: string,
+  ): Promise<GeneratedPurchaseOrderResult> {
+    return request<GeneratedPurchaseOrderResult>(
+      `/api/sales-orders/${id}/purchase-orders/generate`,
+      { method: 'POST', body: { idempotency_key: idempotencyKey } },
+    );
+  },
+  getCustomsDeclaration(salesOrderId: string): Promise<CustomsDeclaration> {
+    return request<CustomsDeclaration>(`/api/sales-orders/${salesOrderId}/customs-declaration`);
+  },
+  listCustomsDeclarations(): Promise<CustomsDeclarationList> {
+    return request<CustomsDeclarationList>('/api/customs-declarations');
+  },
+  createCustomsDeclaration(
+    salesOrderId: string,
+    input: CustomsDeclarationInput,
+  ): Promise<{ declaration: CustomsDeclaration; idempotent: boolean }> {
+    return request(`/api/sales-orders/${salesOrderId}/customs-declarations`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  refreshCustomsDeclaration(
+    declarationSetId: string,
+    input: CustomsDeclarationInput,
+  ): Promise<{
+    declaration: CustomsDeclaration;
+    idempotent: boolean;
+    refreshed: boolean;
+    preserved_version_count: number;
+  }> {
+    return request(`/api/customs-declarations/${declarationSetId}/refresh`, {
+      method: 'POST',
+      body: input,
+    });
+  },
+  generateCustomsDeclaration(
+    declarationSetId: string,
+    idempotencyKey: string,
+  ): Promise<{ version: CustomsDeclarationVersion; idempotent: boolean }> {
+    return request(`/api/customs-declarations/${declarationSetId}/generate`, {
+      method: 'POST',
+      body: { idempotency_key: idempotencyKey },
+    });
+  },
+  exportCustomsDeclarationVersion(
+    declarationSetId: string,
+    version: number,
+    idempotencyKey: string,
+  ): Promise<{ version: CustomsDeclarationVersion; idempotent: boolean }> {
+    return request(`/api/customs-declarations/${declarationSetId}/versions/${version}/export`, {
+      method: 'POST',
+      body: { idempotency_key: idempotencyKey },
+    });
+  },
+  async getCustomsDeclarationDownloadUrl(
+    declarationSetId: string,
+    version: number,
+    documentType: 'pre_entry' | 'authorization',
+  ): Promise<string> {
+    const { token } = await request<FileDownloadToken>(
+      `/api/customs-declarations/${declarationSetId}/versions/${version}/files/${documentType}/token`,
+      { method: 'POST' },
+    );
+    return `/api/files/download?token=${encodeURIComponent(token)}`;
   },
   // Phase 1F-C approval transitions. Each POSTs to /:id/{action} and returns the
   // updated order; reject requires a reason, submit/approve/withdraw take none
@@ -1338,6 +1438,15 @@ export const apiClient = {
   },
   lockDocumentSet(id: string): Promise<TradeDocumentSet> {
     return request<TradeDocumentSet>(`/api/document-sets/${id}/lock`, { method: 'POST' });
+  },
+  convertDocumentSetToSalesOrder(
+    id: string,
+    input: { order_number: string; idempotency_key: string; expected_version: number },
+  ): Promise<QuoteToSalesOrderResult> {
+    return request<QuoteToSalesOrderResult>(`/api/document-sets/${id}/sales-order`, {
+      method: 'POST',
+      body: input,
+    });
   },
   exportDocumentSet(id: string, documentType: TradeDocumentType): Promise<TradeDocumentExport> {
     return request<TradeDocumentExport>(`/api/document-sets/${id}/exports/${documentType}`, {

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { Pool, PoolClient } from 'pg';
@@ -13,6 +13,8 @@ import {
   DocumentWorkbenchConflictException,
   DocumentWorkbenchNotFoundException,
   InvalidDocumentWorkbenchDataException,
+  ProcurementPrerequisiteMissingItem,
+  ProcurementPrerequisitesException,
 } from './document-workbench.errors';
 import { computeDocumentMoney } from './document-money';
 import { buildDocumentPackages } from './document-packing';
@@ -26,12 +28,20 @@ import {
   toPublicDocumentSnapshot,
 } from './document.types';
 import {
+  ConvertDocumentSetToSalesOrderDto,
   CreateDocumentSetDto,
   CreateShareLinkDto,
+  GenerateSalesOrderPurchaseOrdersDto,
   ListDocumentSetsQuery,
+  LockSalesOrderForFulfillmentDto,
+  SyncSalesOrderDocumentsDto,
   UpdateDocumentSetDto,
 } from './dto/document-set.dto';
 import { DocumentWorkbenchActor } from './products.service';
+import { OrderItemRow, toOrderItemResponse } from '../sales-orders/dto/order-item.dto';
+import { assertSalesOrderCustomerInScope } from '../sales-orders/sales-order-customer-scope';
+import { SalesOrderRow, toSalesOrderResponse } from '../sales-orders/sales-orders.response';
+import { computeLineTotal, sumMoney } from '../common/order-money';
 
 interface DocumentSetRow {
   id: string;
@@ -65,6 +75,12 @@ interface DocumentSetRow {
   locked_snapshot: InternalDocumentSnapshot | null;
   locked_by: string | null;
   locked_at: Date | null;
+  source_sales_order_snapshot: SalesOrderFulfillmentSnapshot | null;
+  source_sales_order_updated_at: Date | null;
+  source_sales_order_locked: boolean | null;
+  source_sales_order_sync_key: string | null;
+  source_sales_order_synced_by: string | null;
+  source_sales_order_synced_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -116,6 +132,80 @@ interface PublicLinkRow {
   size_bytes: string;
 }
 
+interface SalesOrderFulfillmentItemSnapshot {
+  id: string;
+  product_id: string | null;
+  line_no: number;
+  description: string;
+  product_code: string | null;
+  unit: string | null;
+  quantity: string;
+  unit_price: string;
+  line_total: string;
+  notes: string | null;
+  product: {
+    sku: string;
+    name: string;
+    description: string | null;
+    hs_code: string | null;
+    cost_unit_price: string | null;
+    weight_kg: string | null;
+    volume_cbm: string | null;
+    thumbnail_file_id: string | null;
+    custom_values: Record<string, unknown>;
+  } | null;
+}
+
+interface SalesOrderFulfillmentSnapshot {
+  id: string;
+  owner_user_id: string;
+  customer_id: string;
+  order_number: string;
+  currency: string;
+  total_amount: string;
+  status: string;
+  updated_at: string;
+  locked_at: string | null;
+  customer: {
+    id: string;
+    company_name: string;
+    contact_name: string | null;
+    email: string | null;
+    phone: string | null;
+    country: string | null;
+  };
+  items: SalesOrderFulfillmentItemSnapshot[];
+}
+
+interface ProcurementProductRow {
+  sales_order_item_id: string;
+  line_no: number;
+  product_id: string | null;
+  product_code: string | null;
+  description: string;
+  unit: string | null;
+  quantity: string;
+  supplier_id: string | null;
+  supplier_company_name: string | null;
+  purchase_currency: string | null;
+  purchase_unit_price: string | null;
+  product_sku: string | null;
+  product_name: string | null;
+}
+
+interface DirectPurchaseOrderRow {
+  id: string;
+  supplier_id: string;
+  owner_user_id: string;
+  order_number: string;
+  currency: string;
+  total_amount: string;
+  status: string;
+  source_sales_order_generation_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface PublicDocumentDownload {
   stream: Readable;
   fileName: string;
@@ -129,11 +219,15 @@ const SET_COLUMNS = `id, owner_user_id, customer_id, sales_order_id, quote_numbe
   insurance_amount::text, tax_amount::text, internal_expenses::text, allocation_method,
   packing_mode, template_key, theme_color, visible_fields, terms, bank_info,
   logo_file_id, signature_file_id, version, locked_snapshot, locked_by, locked_at,
+  source_sales_order_snapshot, source_sales_order_updated_at, source_sales_order_locked,
+  source_sales_order_sync_key, source_sales_order_synced_by, source_sales_order_synced_at,
   created_at, updated_at`;
 
 const LINE_COLUMNS = `id, line_no, product_id, sku, name, description, quantity::text,
   unit, unit_price::text, line_total::text, cost_unit_price::text, cost_total::text,
   weight_kg::text, volume_cbm::text, package_no, thumbnail_file_id, custom_values`;
+
+const SUPPORTED_SALES_ORDER_CURRENCIES = new Set(['RMB', 'USD', 'HKD', 'EUR']);
 
 @Injectable()
 export class DocumentSetsService {
@@ -153,6 +247,13 @@ export class DocumentSetsService {
 
   private scopeAllowsOwner(dataScope: string, actor: DocumentWorkbenchActor, ownerId: string) {
     return dataScope === 'all' || (this.restrictsToOwner(dataScope) && ownerId === actor.userId);
+  }
+
+  private intersectScope(left: string, right: string): string {
+    if (left === 'none' || right === 'none') return 'none';
+    if (left === 'all') return right;
+    if (right === 'all') return left;
+    return 'own';
   }
 
   private async financialScope(actor: DocumentWorkbenchActor): Promise<string> {
@@ -366,6 +467,7 @@ export class DocumentSetsService {
     });
     const snapshotLines = lines.map((line, index) => ({
       id: line.id,
+      product_id: line.product_id,
       line_no: line.line_no,
       sku: line.sku,
       name: line.name,
@@ -443,9 +545,16 @@ export class DocumentSetsService {
   }
 
   private present(snapshot: InternalDocumentSnapshot, includeFinancials: boolean) {
-    return includeFinancials
-      ? snapshot
-      : { ...toPublicDocumentSnapshot(snapshot), sales_order_id: snapshot.sales_order_id };
+    if (includeFinancials) return snapshot;
+    const publicSnapshot = toPublicDocumentSnapshot(snapshot);
+    return {
+      ...publicSnapshot,
+      sales_order_id: snapshot.sales_order_id,
+      lines: publicSnapshot.lines.map((line, index) => ({
+        ...line,
+        product_id: snapshot.lines[index].product_id ?? null,
+      })),
+    };
   }
 
   private auditProjection(snapshot: InternalDocumentSnapshot) {
@@ -453,6 +562,1030 @@ export class DocumentSetsService {
       ...toPublicDocumentSnapshot(snapshot),
       sales_order_id: snapshot.sales_order_id,
     };
+  }
+
+  private linkedSnapshot(snapshot: InternalDocumentSnapshot, salesOrderId: string | null) {
+    return snapshot.sales_order_id === salesOrderId
+      ? snapshot
+      : { ...snapshot, sales_order_id: salesOrderId };
+  }
+
+  private async salesOrderResponse(client: PoolClient, id: string) {
+    const order = await client.query<SalesOrderRow>(
+      `SELECT * FROM sales_orders WHERE id=$1 AND deleted_at IS NULL`,
+      [id],
+    );
+    if (order.rows.length === 0) throw new DocumentWorkbenchNotFoundException('Sales order');
+    const items = await client.query<OrderItemRow>(
+      `SELECT * FROM sales_order_items
+        WHERE order_id=$1 AND deleted_at IS NULL
+        ORDER BY line_no`,
+      [id],
+    );
+    return {
+      row: order.rows[0],
+      response: {
+        ...toSalesOrderResponse(order.rows[0]),
+        items: items.rows.map(toOrderItemResponse),
+      },
+    };
+  }
+
+  private async orderActor(actor: DocumentWorkbenchActor): Promise<DocumentWorkbenchActor> {
+    const permission = await this.rbac.checkPermission(actor.userId, actor.tenantId, 'orders:view');
+    if (!permission.allowed) throw new ForbiddenException('Permission denied');
+    return {
+      ...actor,
+      dataScope: this.intersectScope(actor.dataScope, permission.dataScope),
+    };
+  }
+
+  private async fulfillmentOrderRow(
+    client: PoolClient,
+    actor: DocumentWorkbenchActor,
+    id: string,
+    lock = false,
+  ): Promise<SalesOrderRow> {
+    const params: unknown[] = [id];
+    let scope = '';
+    if (this.restrictsToOwner(actor.dataScope)) {
+      params.push(actor.userId);
+      scope = ` AND owner_user_id=$${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scope = ' AND false';
+    }
+    const order = await client.query<SalesOrderRow>(
+      `SELECT * FROM sales_orders
+        WHERE id=$1 AND deleted_at IS NULL${scope}${lock ? ' FOR UPDATE' : ''}`,
+      params,
+    );
+    if (order.rows.length === 0) {
+      throw new DocumentWorkbenchNotFoundException('Sales order');
+    }
+    return order.rows[0];
+  }
+
+  private sameTimestamp(left: Date, right: string): boolean {
+    const parsed = new Date(right);
+    return !Number.isNaN(parsed.valueOf()) && left.toISOString() === parsed.toISOString();
+  }
+
+  private async buildLiveOrderSnapshot(
+    client: PoolClient,
+    row: SalesOrderRow,
+    lockedAt: Date | null,
+  ): Promise<SalesOrderFulfillmentSnapshot> {
+    const customer = await client.query<SalesOrderFulfillmentSnapshot['customer']>(
+      `SELECT id, company_name, contact_name, email, phone, country
+         FROM customers
+        WHERE id=$1 AND deleted_at IS NULL`,
+      [row.customer_id],
+    );
+    if (customer.rows.length === 0) {
+      throw new DocumentWorkbenchNotFoundException('Customer');
+    }
+    const items = await client.query<{
+      id: string;
+      product_id: string | null;
+      line_no: number;
+      description: string;
+      product_code: string | null;
+      unit: string | null;
+      quantity: string;
+      unit_price: string;
+      line_total: string;
+      notes: string | null;
+      product_sku: string | null;
+      product_name: string | null;
+      product_description: string | null;
+      hs_code: string | null;
+      cost_unit_price: string | null;
+      weight_kg: string | null;
+      volume_cbm: string | null;
+      thumbnail_file_id: string | null;
+      custom_values: Record<string, unknown> | null;
+    }>(
+      `SELECT item.id, item.product_id, item.line_no, item.description,
+              item.product_code, item.unit, item.quantity::text,
+              item.unit_price::text, item.line_total::text, item.notes,
+              product.sku AS product_sku, product.name AS product_name,
+              product.description AS product_description,
+              product.hs_code,
+              product.cost_unit_price::text, product.weight_kg::text,
+              product.volume_cbm::text, product.thumbnail_file_id,
+              product.custom_values
+         FROM sales_order_items item
+         LEFT JOIN products product
+           ON product.id=item.product_id AND product.active=true
+        WHERE item.order_id=$1 AND item.deleted_at IS NULL
+        ORDER BY item.line_no`,
+      [row.id],
+    );
+    if (items.rows.length === 0) {
+      throw new InvalidDocumentWorkbenchDataException(
+        'A sales order must have at least one line before fulfillment locking or conversion',
+        'SALES_ORDER_ITEMS_REQUIRED',
+      );
+    }
+    return {
+      id: row.id,
+      owner_user_id: row.owner_user_id,
+      customer_id: row.customer_id,
+      order_number: row.order_number,
+      currency: row.currency,
+      total_amount: row.total_amount,
+      status: row.status,
+      updated_at: row.updated_at.toISOString(),
+      locked_at: lockedAt?.toISOString() ?? null,
+      customer: customer.rows[0],
+      items: items.rows.map((item) => ({
+        id: item.id,
+        product_id: item.product_id,
+        line_no: item.line_no,
+        description: item.description,
+        product_code: item.product_code,
+        unit: item.unit,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        line_total: item.line_total,
+        notes: item.notes,
+        product: item.product_sku
+          ? {
+              sku: item.product_sku,
+              name: item.product_name!,
+              description: item.product_description,
+              hs_code: item.hs_code,
+              cost_unit_price: item.cost_unit_price,
+              weight_kg: item.weight_kg,
+              volume_cbm: item.volume_cbm,
+              thumbnail_file_id: item.thumbnail_file_id,
+              custom_values: item.custom_values ?? {},
+            }
+          : null,
+      })),
+    };
+  }
+
+  private sourceDocumentInput(
+    snapshot: SalesOrderFulfillmentSnapshot,
+    documentNumber: string,
+  ): CreateDocumentSetDto {
+    return {
+      customer_id: snapshot.customer_id,
+      sales_order_id: snapshot.id,
+      quote_number: documentNumber,
+      pricing_mode: snapshot.items.some((item) => item.product?.cost_unit_price != null)
+        ? 'cost_profit'
+        : 'final_price',
+      language: 'en',
+      incoterm: 'FOB',
+      pricing_currency: snapshot.currency,
+      settlement_currency: snapshot.currency,
+      exchange_rate: '1',
+      discount_type: 'none',
+      discount_value: '0',
+      freight_amount: '0',
+      insurance_amount: '0',
+      tax_amount: '0',
+      internal_expenses: '0',
+      allocation_method: 'value',
+      packing_mode: 'normal',
+      theme_color: '#155EEF',
+      visible_fields: { thumbnail: true, terms: true, bank_info: true, signature: true },
+      lines: snapshot.items.map((item) => ({
+        product_id: item.product_id ?? undefined,
+        sku: (item.product?.sku ?? item.product_code ?? `LINE-${item.line_no}`).slice(0, 100),
+        name: item.product?.name ?? item.description,
+        description: item.product?.description ?? item.notes ?? undefined,
+        quantity: item.quantity,
+        unit: item.unit ?? 'pcs',
+        unit_price: item.unit_price,
+        cost_unit_price: item.product?.cost_unit_price ?? undefined,
+        weight_kg: item.product?.weight_kg ?? undefined,
+        volume_cbm: item.product?.volume_cbm ?? undefined,
+        thumbnail_file_id: item.product?.thumbnail_file_id ?? undefined,
+        custom_values: item.product?.custom_values ?? {},
+      })),
+    };
+  }
+
+  private async documentSyncResponse(
+    client: PoolClient,
+    actor: DocumentWorkbenchActor,
+    row: DocumentSetRow,
+    options: {
+      idempotent: boolean;
+      refreshed: boolean;
+      preservedExports: number;
+      resultVersion?: number;
+      snapshot?: InternalDocumentSnapshot;
+      sourceUpdatedAt?: Date;
+      sourceLocked?: boolean;
+    },
+  ) {
+    const financialScope = await this.financialScope(actor);
+    const internalSnapshot =
+      options.snapshot ??
+      (row.status === 'locked' && row.locked_snapshot
+        ? this.linkedSnapshot(row.locked_snapshot, row.sales_order_id)
+        : await this.snapshot(client, row));
+    return {
+      document: this.present(
+        internalSnapshot,
+        this.scopeAllowsOwner(financialScope, actor, row.owner_user_id),
+      ),
+      document_types: ['pi', 'sc', 'ci', 'pl'] as const,
+      source_order: {
+        sales_order_id: row.sales_order_id,
+        updated_at: options.sourceUpdatedAt ?? row.source_sales_order_updated_at,
+        locked: options.sourceLocked ?? row.source_sales_order_locked,
+      },
+      result_document_version: options.resultVersion ?? row.version,
+      idempotent: options.idempotent,
+      refreshed: options.refreshed,
+      preserved_export_count: options.preservedExports,
+    };
+  }
+
+  async lockSalesOrderForFulfillment(
+    actor: DocumentWorkbenchActor,
+    id: string,
+    dto: LockSalesOrderForFulfillmentDto,
+  ) {
+    return withTenantContext(
+      this.pool,
+      { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+      async (client) => {
+        const row = await this.fulfillmentOrderRow(client, actor, id, true);
+        if (row.fulfillment_locked_snapshot) {
+          const existing = await this.salesOrderResponse(client, row.id);
+          return { sales_order: existing.response, idempotent: true };
+        }
+        if (!this.sameTimestamp(row.updated_at, dto.expected_updated_at)) {
+          throw new DocumentWorkbenchConflictException(
+            'Sales order changed before it could be locked',
+            'SALES_ORDER_VERSION_CONFLICT',
+          );
+        }
+        const lockedAt = new Date();
+        const snapshot = await this.buildLiveOrderSnapshot(client, row, lockedAt);
+        const updated = await client.query<SalesOrderRow>(
+          `UPDATE sales_orders
+              SET fulfillment_locked_snapshot=$1, fulfillment_locked_by=$2,
+                  fulfillment_locked_at=$3, updated_at=now()
+            WHERE id=$4 AND fulfillment_locked_snapshot IS NULL
+            RETURNING *`,
+          [JSON.stringify(snapshot), actor.userId, lockedAt, row.id],
+        );
+        await this.audit.logInTransaction(client, {
+          tenantId: actor.tenantId,
+          actorType: 'tenant_user',
+          actorId: actor.userId,
+          action: 'sales_order.fulfillment_locked',
+          resourceType: 'sales_order',
+          resourceId: row.id,
+          after: {
+            order_number: row.order_number,
+            item_count: snapshot.items.length,
+            locked_at: lockedAt,
+          },
+        });
+        const items = await client.query<OrderItemRow>(
+          `SELECT * FROM sales_order_items
+            WHERE order_id=$1 AND deleted_at IS NULL ORDER BY line_no`,
+          [row.id],
+        );
+        return {
+          sales_order: {
+            ...toSalesOrderResponse(updated.rows[0]),
+            items: items.rows.map(toOrderItemResponse),
+          },
+          idempotent: false,
+        };
+      },
+    );
+  }
+
+  async syncSalesOrderDocuments(
+    actor: DocumentWorkbenchActor,
+    id: string,
+    dto: SyncSalesOrderDocumentsDto,
+  ) {
+    const scopedActor = await this.orderActor(actor);
+    try {
+      return await withTenantContext(
+        this.pool,
+        { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+        async (client) => {
+          const row = await this.fulfillmentOrderRow(client, scopedActor, id, true);
+          const priorSync = await client.query<{
+            sales_order_id: string;
+            document_set_id: string;
+            source_order_updated_at: Date;
+            source_order_locked: boolean;
+            result_document_version: number;
+            result_document_snapshot: InternalDocumentSnapshot;
+            result_refreshed: boolean;
+            result_preserved_export_count: number;
+          }>(
+            `SELECT sales_order_id, document_set_id, source_order_updated_at,
+                    source_order_locked, result_document_version,
+                    result_document_snapshot, result_refreshed,
+                    result_preserved_export_count
+               FROM sales_order_document_syncs
+              WHERE idempotency_key=$1`,
+            [dto.idempotency_key],
+          );
+          if (priorSync.rows.length > 0) {
+            if (priorSync.rows[0].sales_order_id !== row.id) {
+              throw new DocumentWorkbenchConflictException(
+                'Idempotency key was already used for another sales order',
+                'IDEMPOTENCY_KEY_REUSED',
+              );
+            }
+            const existing = await this.setRow(
+              client,
+              { ...actor, dataScope: 'all' },
+              priorSync.rows[0].document_set_id,
+            );
+            return this.documentSyncResponse(client, actor, existing, {
+              idempotent: true,
+              refreshed: priorSync.rows[0].result_refreshed,
+              preservedExports: priorSync.rows[0].result_preserved_export_count,
+              resultVersion: priorSync.rows[0].result_document_version,
+              snapshot: priorSync.rows[0].result_document_snapshot,
+              sourceUpdatedAt: priorSync.rows[0].source_order_updated_at,
+              sourceLocked: priorSync.rows[0].source_order_locked,
+            });
+          }
+          if (!this.sameTimestamp(row.updated_at, dto.expected_updated_at)) {
+            throw new DocumentWorkbenchConflictException(
+              'Sales order changed before documents could be synchronized',
+              'SALES_ORDER_VERSION_CONFLICT',
+            );
+          }
+          const sourceSnapshot = row.fulfillment_locked_snapshot
+            ? (row.fulfillment_locked_snapshot as unknown as SalesOrderFulfillmentSnapshot)
+            : await this.buildLiveOrderSnapshot(client, row, null);
+          const sourceUpdatedAt = new Date(sourceSnapshot.updated_at);
+          const sourceLocked = row.fulfillment_locked_snapshot !== null;
+          const existing = await client.query<DocumentSetRow>(
+            `SELECT ${SET_COLUMNS} FROM trade_document_sets
+              WHERE sales_order_id=$1 AND source_sales_order_snapshot IS NOT NULL
+              FOR UPDATE`,
+            [row.id],
+          );
+          let document: DocumentSetRow;
+          let refreshed = false;
+          let preservedExports = 0;
+          if (existing.rows.length === 0) {
+            const documentNumber = `DOC-${row.order_number.slice(0, 45)}-${row.id.slice(0, 8)}`;
+            const input = this.sourceDocumentInput(sourceSnapshot, documentNumber);
+            const inserted = await client.query<DocumentSetRow>(
+              `INSERT INTO trade_document_sets
+                 (tenant_id, owner_user_id, customer_id, sales_order_id, quote_number,
+                  pricing_mode, language, incoterm, pricing_currency, settlement_currency,
+                  exchange_rate, discount_type, discount_value, freight_amount,
+                  insurance_amount, tax_amount, internal_expenses, allocation_method,
+                  packing_mode, theme_color, visible_fields, source_sales_order_snapshot,
+                  source_sales_order_updated_at, source_sales_order_locked,
+                  source_sales_order_sync_key, source_sales_order_synced_by,
+                  source_sales_order_synced_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                       $18,$19,$20,$21,$22,$23,$24,$25,$26,now())
+               RETURNING ${SET_COLUMNS}`,
+              [
+                actor.tenantId,
+                row.owner_user_id,
+                row.customer_id,
+                row.id,
+                documentNumber,
+                input.pricing_mode,
+                input.language,
+                input.incoterm,
+                input.pricing_currency,
+                input.settlement_currency,
+                input.exchange_rate,
+                input.discount_type,
+                input.discount_value,
+                input.freight_amount,
+                input.insurance_amount,
+                input.tax_amount,
+                input.internal_expenses,
+                input.allocation_method,
+                input.packing_mode,
+                input.theme_color,
+                JSON.stringify(input.visible_fields),
+                JSON.stringify(sourceSnapshot),
+                sourceUpdatedAt,
+                sourceLocked,
+                dto.idempotency_key,
+                actor.userId,
+              ],
+            );
+            document = inserted.rows[0];
+            await this.insertLines(client, actor, document.id, input);
+            document = await this.setRow(client, { ...actor, dataScope: 'all' }, document.id);
+          } else {
+            document = existing.rows[0];
+            const exports = await client.query<{ count: string }>(
+              `SELECT COUNT(*)::text AS count FROM trade_document_exports
+                WHERE document_set_id=$1`,
+              [document.id],
+            );
+            preservedExports = Number(exports.rows[0].count);
+            const unchanged =
+              document.source_sales_order_updated_at?.toISOString() ===
+                sourceUpdatedAt.toISOString() &&
+              document.source_sales_order_locked === sourceLocked;
+            if (!unchanged) {
+              if (document.status === 'locked') {
+                throw new DocumentWorkbenchConflictException(
+                  'Locked order documents cannot be refreshed',
+                  'ORDER_DOCUMENT_SET_LOCKED',
+                );
+              }
+              const before = await this.snapshot(client, document);
+              const input = this.sourceDocumentInput(sourceSnapshot, document.quote_number);
+              const updated = await client.query<DocumentSetRow>(
+                `UPDATE trade_document_sets
+                    SET customer_id=$1, pricing_mode=$2, pricing_currency=$3,
+                        settlement_currency=$3, exchange_rate=1, discount_type='none',
+                        discount_value=0, freight_amount=0, insurance_amount=0,
+                        tax_amount=0, internal_expenses=0, source_sales_order_snapshot=$4,
+                        source_sales_order_updated_at=$5, source_sales_order_locked=$6,
+                        source_sales_order_sync_key=$7, source_sales_order_synced_by=$8,
+                        source_sales_order_synced_at=now(), version=version+1, updated_at=now()
+                  WHERE id=$9
+                  RETURNING ${SET_COLUMNS}`,
+                [
+                  row.customer_id,
+                  input.pricing_mode,
+                  input.pricing_currency,
+                  JSON.stringify(sourceSnapshot),
+                  sourceUpdatedAt,
+                  sourceLocked,
+                  dto.idempotency_key,
+                  actor.userId,
+                  document.id,
+                ],
+              );
+              await client.query(`DELETE FROM trade_document_lines WHERE document_set_id=$1`, [
+                document.id,
+              ]);
+              await this.insertLines(client, actor, document.id, input);
+              document = updated.rows[0];
+              const after = await this.snapshot(client, document);
+              await this.audit.logInTransaction(client, {
+                tenantId: actor.tenantId,
+                actorType: 'tenant_user',
+                actorId: actor.userId,
+                action: 'trade_document.refreshed_from_sales_order',
+                resourceType: 'trade_document_set',
+                resourceId: document.id,
+                before: this.auditProjection(before),
+                after: this.auditProjection(after),
+                metadata: { preserved_export_count: preservedExports },
+              });
+              refreshed = true;
+            }
+          }
+          const resultSnapshot =
+            document.status === 'locked' && document.locked_snapshot
+              ? this.linkedSnapshot(document.locked_snapshot, document.sales_order_id)
+              : await this.snapshot(client, document);
+          await client.query(
+            `INSERT INTO sales_order_document_syncs
+               (tenant_id, sales_order_id, document_set_id, idempotency_key,
+                source_order_updated_at, source_order_locked, result_document_version,
+                result_document_snapshot, result_refreshed,
+                result_preserved_export_count, created_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+            [
+              actor.tenantId,
+              row.id,
+              document.id,
+              dto.idempotency_key,
+              sourceUpdatedAt,
+              sourceLocked,
+              document.version,
+              JSON.stringify(resultSnapshot),
+              refreshed,
+              preservedExports,
+              actor.userId,
+            ],
+          );
+          if (!refreshed) {
+            await this.audit.logInTransaction(client, {
+              tenantId: actor.tenantId,
+              actorType: 'tenant_user',
+              actorId: actor.userId,
+              action: 'trade_document.generated_from_sales_order',
+              resourceType: 'trade_document_set',
+              resourceId: document.id,
+              after: this.auditProjection(resultSnapshot),
+              metadata: { result_document_version: document.version },
+            });
+          }
+          return this.documentSyncResponse(client, actor, document, {
+            idempotent: false,
+            refreshed,
+            preservedExports,
+            snapshot: resultSnapshot,
+          });
+        },
+      );
+    } catch (error) {
+      if ((error as { constraint?: string }).constraint === 'uq_sales_order_document_sync_key') {
+        throw new DocumentWorkbenchConflictException(
+          'Idempotency key was already used for another sales order',
+          'IDEMPOTENCY_KEY_REUSED',
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async generatedPurchaseOrderResponse(client: PoolClient, generationId: string) {
+    const orders = await client.query<DirectPurchaseOrderRow>(
+      `SELECT id, supplier_id, owner_user_id, order_number, currency,
+              total_amount::text, status, source_sales_order_generation_id,
+              created_at, updated_at
+         FROM purchase_orders
+        WHERE source_sales_order_generation_id=$1 AND deleted_at IS NULL
+        ORDER BY order_number, id`,
+      [generationId],
+    );
+    return Promise.all(
+      orders.rows.map(async (order) => {
+        const items = await client.query<{
+          id: string;
+          product_id: string | null;
+          source_sales_order_item_id: string;
+          line_no: number;
+          description: string;
+          product_code: string | null;
+          unit: string | null;
+          quantity: string;
+          unit_price: string;
+          line_total: string;
+        }>(
+          `SELECT id, product_id, source_sales_order_item_id, line_no, description,
+                  product_code, unit, quantity::text, unit_price::text, line_total::text
+             FROM purchase_order_items
+            WHERE order_id=$1 AND deleted_at IS NULL ORDER BY line_no`,
+          [order.id],
+        );
+        return { ...order, items: items.rows };
+      }),
+    );
+  }
+
+  async generatePurchaseOrders(
+    actor: DocumentWorkbenchActor,
+    id: string,
+    dto: GenerateSalesOrderPurchaseOrdersDto,
+  ) {
+    const scopedActor = await this.orderActor(actor);
+    try {
+      return await withTenantContext(
+        this.pool,
+        { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+        async (client) => {
+          const row = await this.fulfillmentOrderRow(client, scopedActor, id, true);
+          const priorKey = await client.query<{ id: string; sales_order_id: string }>(
+            `SELECT id, sales_order_id FROM sales_order_purchase_generations
+              WHERE idempotency_key=$1`,
+            [dto.idempotency_key],
+          );
+          if (priorKey.rows.length > 0) {
+            if (priorKey.rows[0].sales_order_id !== row.id) {
+              throw new DocumentWorkbenchConflictException(
+                'Idempotency key was already used for another sales order',
+                'IDEMPOTENCY_KEY_REUSED',
+              );
+            }
+            return {
+              generation_id: priorKey.rows[0].id,
+              purchase_orders: await this.generatedPurchaseOrderResponse(
+                client,
+                priorKey.rows[0].id,
+              ),
+              idempotent: true,
+            };
+          }
+          if (!row.fulfillment_locked_snapshot) {
+            throw new DocumentWorkbenchConflictException(
+              'Lock the sales order before generating purchase orders',
+              'SALES_ORDER_NOT_LOCKED',
+            );
+          }
+          const priorOrder = await client.query<{ id: string }>(
+            `SELECT id FROM sales_order_purchase_generations WHERE sales_order_id=$1`,
+            [row.id],
+          );
+          if (priorOrder.rows.length > 0) {
+            throw new DocumentWorkbenchConflictException(
+              'Purchase orders were already generated with a different idempotency key',
+              'PURCHASE_ORDERS_ALREADY_GENERATED',
+            );
+          }
+          const mappings = await client.query<ProcurementProductRow>(
+            `SELECT item.id AS sales_order_item_id, item.line_no, item.product_id,
+                    item.product_code, item.description, item.unit, item.quantity::text,
+                    product.supplier_id, supplier.company_name AS supplier_company_name,
+                    product.purchase_currency, product.purchase_unit_price::text,
+                    product.sku AS product_sku, product.name AS product_name
+               FROM sales_order_items item
+               LEFT JOIN products product
+                 ON product.id=item.product_id AND product.active=true
+               LEFT JOIN suppliers supplier
+                 ON supplier.id=product.supplier_id AND supplier.deleted_at IS NULL
+              WHERE item.order_id=$1 AND item.deleted_at IS NULL
+              ORDER BY item.line_no`,
+            [row.id],
+          );
+          const missing: ProcurementPrerequisiteMissingItem[] = mappings.rows.flatMap((item) => {
+            const fields: string[] = [];
+            if (!item.product_id || !item.product_sku) fields.push('product_id');
+            if (!item.supplier_id || !item.supplier_company_name) fields.push('supplier_id');
+            if (!item.purchase_currency) fields.push('purchase_currency');
+            if (!item.purchase_unit_price) fields.push('purchase_unit_price');
+            return fields.length === 0
+              ? []
+              : [
+                  {
+                    sales_order_item_id: item.sales_order_item_id,
+                    line_no: item.line_no,
+                    product_id: item.product_id,
+                    product_code: item.product_code,
+                    missing_fields: fields,
+                  },
+                ];
+          });
+          if (missing.length > 0) throw new ProcurementPrerequisitesException(missing);
+          const sourceSnapshot =
+            row.fulfillment_locked_snapshot as unknown as SalesOrderFulfillmentSnapshot | null;
+          const generationSnapshot = {
+            order: sourceSnapshot,
+            procurement_lines: mappings.rows.map((item) => ({
+              sales_order_item_id: item.sales_order_item_id,
+              product_id: item.product_id,
+              supplier_id: item.supplier_id,
+              supplier_company_name: item.supplier_company_name,
+              purchase_currency: item.purchase_currency,
+              purchase_unit_price: item.purchase_unit_price,
+              quantity: item.quantity,
+            })),
+          };
+          const generation = await client.query<{ id: string }>(
+            `INSERT INTO sales_order_purchase_generations
+               (tenant_id, sales_order_id, idempotency_key, source_order_snapshot, created_by)
+             VALUES ($1,$2,$3,$4,$5)
+             RETURNING id`,
+            [
+              actor.tenantId,
+              row.id,
+              dto.idempotency_key,
+              JSON.stringify(generationSnapshot),
+              actor.userId,
+            ],
+          );
+          const groups = new Map<string, ProcurementProductRow[]>();
+          for (const item of mappings.rows) {
+            const key = `${item.supplier_id}:${item.purchase_currency}`;
+            groups.set(key, [...(groups.get(key) ?? []), item]);
+          }
+          for (const group of groups.values()) {
+            const purchaseOrderId = randomUUID();
+            const orderNumber = `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${purchaseOrderId.slice(0, 8).toUpperCase()}`;
+            const lineTotals = group.map((item) =>
+              computeLineTotal(item.quantity, item.purchase_unit_price!),
+            );
+            const total = sumMoney(lineTotals);
+            await client.query(
+              `INSERT INTO purchase_orders
+                 (id, tenant_id, supplier_id, owner_user_id, order_number, currency,
+                  total_amount, status, notes, expected_total_amount,
+                  source_sales_order_generation_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$7,$9)`,
+              [
+                purchaseOrderId,
+                actor.tenantId,
+                group[0].supplier_id,
+                actor.userId,
+                orderNumber,
+                group[0].purchase_currency,
+                total,
+                `Generated from sales order ${row.order_number}`,
+                generation.rows[0].id,
+              ],
+            );
+            await client.query(
+              `INSERT INTO sales_order_purchase_orders
+                 (tenant_id, sales_order_id, purchase_order_id,
+                  source_sales_order_generation_id)
+               VALUES ($1,$2,$3,$4)`,
+              [actor.tenantId, row.id, purchaseOrderId, generation.rows[0].id],
+            );
+            for (const [index, item] of group.entries()) {
+              const lineTotal = lineTotals[index];
+              const itemSnapshot = {
+                sales_order_item_id: item.sales_order_item_id,
+                product_id: item.product_id,
+                supplier_id: item.supplier_id,
+                supplier_company_name: item.supplier_company_name,
+                purchase_currency: item.purchase_currency,
+                purchase_unit_price: item.purchase_unit_price,
+                quantity: item.quantity,
+              };
+              await client.query(
+                `INSERT INTO purchase_order_items
+                   (tenant_id, order_id, product_id, source_sales_order_item_id,
+                    source_sales_order_item_snapshot, line_no, description,
+                    product_code, unit, quantity, unit_price, line_total,
+                    expected_unit_price, expected_line_total, pricing_snapshot)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$11,$12,$5)`,
+                [
+                  actor.tenantId,
+                  purchaseOrderId,
+                  item.product_id,
+                  item.sales_order_item_id,
+                  JSON.stringify(itemSnapshot),
+                  index + 1,
+                  item.product_name ?? item.description,
+                  item.product_sku ?? item.product_code,
+                  item.unit,
+                  item.quantity,
+                  item.purchase_unit_price,
+                  lineTotal,
+                ],
+              );
+            }
+            await this.audit.logInTransaction(client, {
+              tenantId: actor.tenantId,
+              actorType: 'tenant_user',
+              actorId: actor.userId,
+              action: 'purchase_order.generated_from_sales_order',
+              resourceType: 'purchase_order',
+              resourceId: purchaseOrderId,
+              after: {
+                sales_order_id: row.id,
+                generation_id: generation.rows[0].id,
+                item_count: group.length,
+                status: 'draft',
+              },
+            });
+          }
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'sales_order.purchase_orders_generated',
+            resourceType: 'sales_order',
+            resourceId: row.id,
+            after: {
+              generation_id: generation.rows[0].id,
+              purchase_order_count: groups.size,
+              item_count: mappings.rows.length,
+            },
+          });
+          return {
+            generation_id: generation.rows[0].id,
+            purchase_orders: await this.generatedPurchaseOrderResponse(
+              client,
+              generation.rows[0].id,
+            ),
+            idempotent: false,
+          };
+        },
+      );
+    } catch (error) {
+      const constraint = (error as { constraint?: string }).constraint;
+      if (constraint === 'uq_sales_order_purchase_generation_key') {
+        throw new DocumentWorkbenchConflictException(
+          'Idempotency key was already used for another sales order',
+          'IDEMPOTENCY_KEY_REUSED',
+        );
+      }
+      if (constraint === 'uq_sales_order_purchase_generation_order') {
+        throw new DocumentWorkbenchConflictException(
+          'Purchase orders were already generated for this sales order',
+          'PURCHASE_ORDERS_ALREADY_GENERATED',
+        );
+      }
+      throw error;
+    }
+  }
+
+  async convertToSalesOrder(
+    actor: DocumentWorkbenchActor,
+    id: string,
+    dto: ConvertDocumentSetToSalesOrderDto,
+  ) {
+    const documentPermission = await this.rbac.checkPermission(
+      actor.userId,
+      actor.tenantId,
+      'document_sets:view',
+    );
+    const sourceScope = documentPermission.allowed
+      ? this.intersectScope(actor.dataScope, documentPermission.dataScope)
+      : 'none';
+    if (sourceScope === 'none') throw new ForbiddenException('Permission denied');
+    const scopedActor = { ...actor, dataScope: sourceScope };
+
+    try {
+      return await withTenantContext(
+        this.pool,
+        { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
+        async (client) => {
+          const row = await this.setRow(client, scopedActor, id, true);
+          if (!row.customer_id) {
+            throw new InvalidDocumentWorkbenchDataException(
+              'A customer is required before creating a sales order',
+              'QUOTE_CUSTOMER_REQUIRED',
+            );
+          }
+          await assertSalesOrderCustomerInScope(client, actor, row.customer_id);
+          if (row.sales_order_id) {
+            const existing = await this.salesOrderResponse(client, row.sales_order_id);
+            if (
+              existing.row.source_document_set_id !== row.id ||
+              existing.row.source_quote_idempotency_key !== dto.idempotency_key ||
+              existing.row.order_number !== dto.order_number
+            ) {
+              throw new DocumentWorkbenchConflictException(
+                'Document set is already linked to a different sales order conversion',
+                'DOCUMENT_SET_ALREADY_CONVERTED',
+              );
+            }
+            return {
+              sales_order: existing.response,
+              source_quote: {
+                document_set_id: row.id,
+                quote_number: existing.row.source_quote_number,
+                version: existing.row.source_quote_version,
+              },
+              idempotent: true,
+            };
+          }
+          if (row.version !== dto.expected_version) {
+            throw new DocumentWorkbenchConflictException(
+              'Document version changed',
+              'DOCUMENT_VERSION_CONFLICT',
+            );
+          }
+          if (!SUPPORTED_SALES_ORDER_CURRENCIES.has(row.pricing_currency)) {
+            throw new InvalidDocumentWorkbenchDataException(
+              `Sales orders do not support currency ${row.pricing_currency}`,
+              'ORDER_CURRENCY_UNSUPPORTED',
+            );
+          }
+          const keyOwner = await client.query<{ source_document_set_id: string }>(
+            `SELECT source_document_set_id
+               FROM sales_orders
+              WHERE source_quote_idempotency_key=$1 AND deleted_at IS NULL`,
+            [dto.idempotency_key],
+          );
+          if (keyOwner.rows.length > 0 && keyOwner.rows[0].source_document_set_id !== row.id) {
+            throw new DocumentWorkbenchConflictException(
+              'Idempotency key was already used for another quote',
+              'IDEMPOTENCY_KEY_REUSED',
+            );
+          }
+
+          const sourceSnapshot =
+            row.status === 'locked' && row.locked_snapshot
+              ? row.locked_snapshot
+              : await this.snapshot(client, row);
+          const tenantCurrency = await client.query<{ currency: string | null }>(
+            `SELECT value_json #>> '{}' AS currency
+               FROM tenant_settings
+              WHERE key='base_currency'
+              LIMIT 1`,
+          );
+          const baseCurrency = tenantCurrency.rows[0]?.currency ?? 'RMB';
+          const sameCurrency = baseCurrency === sourceSnapshot.pricing_currency;
+          const convertedAt = new Date();
+          const insertedOrder = await client.query<SalesOrderRow>(
+            `INSERT INTO sales_orders
+               (tenant_id, customer_id, owner_user_id, order_number, pi_number, pi_file_id,
+                currency, total_amount, status, notes, fx_rate, fx_rate_source,
+                fx_captured_at, total_amount_base, source_document_set_id,
+                source_quote_number, source_quote_version, source_quote_snapshot,
+                source_quote_idempotency_key, source_quote_converted_by,
+                source_quote_converted_at)
+             VALUES ($1,$2,$3,$4,NULL,NULL,$5,$6,'draft',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+             RETURNING *`,
+            [
+              actor.tenantId,
+              row.customer_id,
+              actor.userId,
+              dto.order_number,
+              sourceSnapshot.pricing_currency,
+              sourceSnapshot.totals.grand_total,
+              `Created from quote ${sourceSnapshot.quote_number} v${sourceSnapshot.source_version}`,
+              sameCurrency ? '1' : null,
+              sameCurrency ? 'system' : null,
+              sameCurrency ? convertedAt : null,
+              sameCurrency ? sourceSnapshot.totals.grand_total : null,
+              row.id,
+              sourceSnapshot.quote_number,
+              sourceSnapshot.source_version,
+              JSON.stringify(sourceSnapshot),
+              dto.idempotency_key,
+              actor.userId,
+              convertedAt,
+            ],
+          );
+          const order = insertedOrder.rows[0];
+          const itemRows: OrderItemRow[] = [];
+          for (const [index, line] of sourceSnapshot.lines.entries()) {
+            const insertedItem = await client.query<OrderItemRow>(
+              `INSERT INTO sales_order_items
+                 (tenant_id, order_id, product_id, source_document_line_id,
+                  source_line_snapshot, line_no, description, product_code, unit,
+                  quantity, unit_price, line_total, notes)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               RETURNING *`,
+              [
+                actor.tenantId,
+                order.id,
+                line.product_id ?? null,
+                line.id,
+                JSON.stringify(line),
+                index + 1,
+                line.name,
+                line.sku.slice(0, 64),
+                line.unit.slice(0, 16),
+                line.quantity,
+                line.unit_price,
+                line.line_total,
+                line.description?.slice(0, 1000) ?? null,
+              ],
+            );
+            itemRows.push(insertedItem.rows[0]);
+          }
+          await client.query(
+            `UPDATE trade_document_sets
+                SET sales_order_id=$1, updated_at=now()
+              WHERE id=$2`,
+            [order.id, row.id],
+          );
+          const response = {
+            ...toSalesOrderResponse(order),
+            items: itemRows.map(toOrderItemResponse),
+          };
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'sales_order.created_from_quote',
+            resourceType: 'sales_order',
+            resourceId: order.id,
+            after: response,
+            metadata: {
+              source_document_set_id: row.id,
+              source_quote_version: sourceSnapshot.source_version,
+            },
+          });
+          await this.audit.logInTransaction(client, {
+            tenantId: actor.tenantId,
+            actorType: 'tenant_user',
+            actorId: actor.userId,
+            action: 'trade_document.converted_to_sales_order',
+            resourceType: 'trade_document_set',
+            resourceId: row.id,
+            after: this.auditProjection(this.linkedSnapshot(sourceSnapshot, order.id)),
+            metadata: { sales_order_id: order.id },
+          });
+          return {
+            sales_order: response,
+            source_quote: {
+              document_set_id: row.id,
+              quote_number: sourceSnapshot.quote_number,
+              version: sourceSnapshot.source_version,
+            },
+            idempotent: false,
+          };
+        },
+      );
+    } catch (error) {
+      const constraint = (error as { constraint?: string }).constraint;
+      if (constraint === 'uq_sales_orders_tenant_order_number') {
+        throw new DocumentWorkbenchConflictException(
+          'Order number already exists',
+          'DUPLICATE_ORDER_NUMBER',
+        );
+      }
+      if (constraint === 'uq_sales_orders_source_quote_idempotency') {
+        throw new DocumentWorkbenchConflictException(
+          'Idempotency key was already used for another quote',
+          'IDEMPOTENCY_KEY_REUSED',
+        );
+      }
+      throw error;
+    }
   }
 
   private async insertLines(
@@ -664,11 +1797,14 @@ export class DocumentSetsService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const row = await this.setRow(client, actor, id);
-        const snapshot =
+        const storedSnapshot =
           row.status === 'locked' && row.locked_snapshot
             ? row.locked_snapshot
             : await this.snapshot(client, row);
-        return { snapshot, ownerId: row.owner_user_id };
+        return {
+          snapshot: this.linkedSnapshot(storedSnapshot, row.sales_order_id),
+          ownerId: row.owner_user_id,
+        };
       },
     );
     return this.present(
@@ -695,6 +1831,12 @@ export class DocumentSetsService {
             throw new DocumentWorkbenchConflictException(
               'Locked document sets are immutable',
               'DOCUMENT_SET_LOCKED',
+            );
+          }
+          if (beforeRow.sales_order_id && dto.sales_order_id !== beforeRow.sales_order_id) {
+            throw new DocumentWorkbenchConflictException(
+              'A converted quote must keep its sales order link',
+              'SALES_ORDER_LINK_IMMUTABLE',
             );
           }
           if (beforeRow.version !== dto.expected_version) {
@@ -798,7 +1940,10 @@ export class DocumentSetsService {
         if (row.status === 'locked') {
           if (!row.locked_snapshot)
             throw new DocumentWorkbenchConflictException('Locked snapshot is missing');
-          return { snapshot: row.locked_snapshot, ownerId: row.owner_user_id };
+          return {
+            snapshot: this.linkedSnapshot(row.locked_snapshot, row.sales_order_id),
+            ownerId: row.owner_user_id,
+          };
         }
         const lockedAt = new Date();
         const snapshot = await this.snapshot(client, { ...row, status: 'locked' }, lockedAt);

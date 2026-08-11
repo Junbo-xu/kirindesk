@@ -310,12 +310,38 @@ test('browser completes real split fulfillment with independent payment mileston
   await expect(salesPage.getByText('accepted', { exact: false })).toBeVisible();
   await expect(salesPage.getByText('2.000', { exact: true }).first()).toBeVisible();
 
+  const createRequests: Array<Record<string, unknown>> = [];
+  const createResponses: Array<{ id: string; idempotent: boolean }> = [];
+  const createShipmentPath = `**/api/sales-orders/${salesOrderId}/shipments`;
+  await salesPage.route(createShipmentPath, async (route) => {
+    createRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+    const response = await route.fetch();
+    createResponses.push((await response.json()) as { id: string; idempotent: boolean });
+    if (createRequests.length === 1) {
+      await route.abort('failed');
+      return;
+    }
+    await route.fulfill({ response });
+  });
   await salesPage.getByLabel('发货批次').fill('E2E-SHIP-1');
   await salesPage.getByLabel('发货数量').fill('2');
+  await salesPage.getByLabel('箱号').fill('E2E-BOX-1');
+  await salesPage.getByLabel('毛重 kg').fill('2.5000');
+  await salesPage.getByLabel('净重 kg').fill('2.0000');
+  await salesPage.getByLabel('体积 CBM').fill('0.020000');
   await salesPage.getByLabel('承运方').fill('DHL');
   await salesPage.getByLabel('物流单号').fill(`DHL-${Date.now()}`);
   await salesPage.getByRole('button', { name: '创建发货' }).click();
+  await expect(salesPage.getByRole('alert')).toBeVisible();
+  await salesPage.getByRole('button', { name: '创建发货' }).click();
   await expect(salesPage.locator('strong', { hasText: 'E2E-SHIP-1' })).toBeVisible();
+  expect(createRequests).toHaveLength(2);
+  expect(createRequests[1]).toEqual(createRequests[0]);
+  expect(createResponses).toEqual([
+    expect.objectContaining({ idempotent: false }),
+    expect.objectContaining({ id: createResponses[0].id, idempotent: true }),
+  ]);
+  await salesPage.unroute(createShipmentPath);
 
   await salesPage.getByLabel('费用关联发货').selectOption({ label: 'E2E-SHIP-1' });
   await salesPage.getByLabel('费用金额').fill('12.3456');
@@ -324,8 +350,31 @@ test('browser completes real split fulfillment with independent payment mileston
   await expect(salesPage.getByText('RMB 12.35', { exact: false })).toBeVisible();
   await salesPage.getByRole('button', { name: '确认发货' }).click();
   await expect(salesPage.getByText('dispatched', { exact: false })).toBeVisible();
+
+  const transitRequests: Array<Record<string, unknown>> = [];
+  const transitResponses: Array<{ id: string; idempotent: boolean }> = [];
+  const transitPath = `**/api/shipments/${createResponses[0].id}/logistics-events`;
+  await salesPage.route(transitPath, async (route) => {
+    transitRequests.push(route.request().postDataJSON() as Record<string, unknown>);
+    const response = await route.fetch();
+    transitResponses.push((await response.json()) as { id: string; idempotent: boolean });
+    if (transitRequests.length === 1) {
+      await route.abort('failed');
+      return;
+    }
+    await route.fulfill({ response });
+  });
+  await salesPage.getByRole('button', { name: '记录运输中' }).click();
+  await expect(salesPage.getByRole('alert')).toBeVisible();
   await salesPage.getByRole('button', { name: '记录运输中' }).click();
   await expect(salesPage.getByText('in_transit', { exact: false })).toBeVisible();
+  expect(transitRequests).toHaveLength(2);
+  expect(transitRequests[1]).toEqual(transitRequests[0]);
+  expect(transitResponses).toEqual([
+    expect.objectContaining({ idempotent: false }),
+    expect.objectContaining({ id: transitResponses[0].id, idempotent: true }),
+  ]);
+  await salesPage.unroute(transitPath);
 
   await salesPage.getByLabel('关联收款流水 E2E-SHIP-1').fill(customerReceiptId);
   await salesPage.getByRole('button', { name: '关联独立收款里程碑' }).click();
@@ -335,6 +384,7 @@ test('browser completes real split fulfillment with independent payment mileston
     mimeType: 'application/pdf',
     buffer: Buffer.from('signed-delivery-evidence'),
   });
+  await salesPage.getByLabel('签收人 E2E-SHIP-1').fill('E2E Buyer Contact');
   await salesPage.getByRole('button', { name: '确认签收' }).click();
   await expect(salesPage.getByText('聚合状态：delivered')).toBeVisible();
   await expect(salesPage.getByText(supplierName)).toHaveCount(0);
