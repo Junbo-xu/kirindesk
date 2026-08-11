@@ -20,6 +20,7 @@ import { PermissionGuard } from '../rbac/permission.guard';
 import { RequirePermission } from '../rbac/require-permission.decorator';
 import { DocumentSetsService } from './document-sets.service';
 import {
+  ConvertDocumentSetToSalesOrderDto,
   CreateDocumentSetDto,
   CreateShareLinkDto,
   ListDocumentSetsQuery,
@@ -98,6 +99,17 @@ export class DocumentSetsController extends DocumentControllerBase {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.documents.lock(this.actor(user, request), id);
+  }
+
+  @Post(':id/sales-order')
+  @RequirePermission('document_sets', 'manage')
+  convertToSalesOrder(
+    @CurrentUser() user: TenantJwtUser,
+    @Req() request: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConvertDocumentSetToSalesOrderDto,
+  ) {
+    return this.documents.convertToSalesOrder(this.actor(user, request), id, dto);
   }
 
   @Post(':id/exports/:documentType')

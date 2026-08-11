@@ -518,6 +518,9 @@ export interface SalesOrderResponse {
   owner_user_id: string;
   order_number: string;
   pi_number: string | null;
+  source_quote_id: string | null;
+  source_quote_version: number | null;
+  source_quote_number: string | null;
   currency: Currency;
   total_amount: string;
   status: OrderStatus;

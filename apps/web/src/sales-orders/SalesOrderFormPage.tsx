@@ -1,5 +1,5 @@
 import { CSSProperties, FormEvent, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiClient } from '../lib/api-client';
 import {
   ApiError,
@@ -64,6 +64,11 @@ export function SalesOrderFormPage() {
   const [items, setItems] = useState<ItemRow[]>([]);
   const [status, setStatus] = useState('');
   const [notes, setNotes] = useState('');
+  const [sourceQuote, setSourceQuote] = useState<{
+    id: string;
+    number: string;
+    version: number;
+  } | null>(null);
 
   // Phase 1F-B FX. fxRate is an optional manual override input (blank = let the
   // server resolve). The frozen snapshot fields are read-only, populated from the
@@ -92,6 +97,15 @@ export function SalesOrderFormPage() {
         setPiNumber(o.pi_number ?? '');
         setCurrency(o.currency);
         setStatus(o.status);
+        setSourceQuote(
+          o.source_quote_id && o.source_quote_number && o.source_quote_version
+            ? {
+                id: o.source_quote_id,
+                number: o.source_quote_number,
+                version: o.source_quote_version,
+              }
+            : null,
+        );
         // Echo the frozen FX snapshot. Prefill the editable rate with the frozen
         // value so re-saving keeps it unless the user clears/changes it.
         setFxRate(o.fx_rate ?? '');
@@ -259,6 +273,14 @@ export function SalesOrderFormPage() {
   return (
     <div style={{ maxWidth: 720, fontFamily: 'system-ui' }}>
       <h1 style={{ fontSize: 20 }}>{isEdit ? '编辑订单' : '新建订单'}</h1>
+      {sourceQuote && (
+        <p>
+          来源：
+          <Link to={`/document-workbench?document=${sourceQuote.id}`}>
+            报价 {sourceQuote.number} v{sourceQuote.version}
+          </Link>
+        </p>
+      )}
       <form onSubmit={onSubmit}>
         <label style={labelStyle}>
           客户

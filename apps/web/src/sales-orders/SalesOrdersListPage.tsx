@@ -159,7 +159,16 @@ export function SalesOrdersListPage() {
           <tbody>
             {orders.map((o) => (
               <tr key={o.id}>
-                <td style={td}>{o.order_number}</td>
+                <td style={td}>
+                  {o.order_number}
+                  {o.source_quote_id && (
+                    <div style={{ fontSize: 12 }}>
+                      <Link to={`/document-workbench?document=${o.source_quote_id}`}>
+                        来源报价 {o.source_quote_number} v{o.source_quote_version}
+                      </Link>
+                    </div>
+                  )}
+                </td>
                 <td style={td}>{customerName(o.customer_id)}</td>
                 <td style={td}>{o.currency}</td>
                 <td style={td}>{o.total_amount}</td>

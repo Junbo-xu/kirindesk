@@ -1339,6 +1339,15 @@ export const apiClient = {
   lockDocumentSet(id: string): Promise<TradeDocumentSet> {
     return request<TradeDocumentSet>(`/api/document-sets/${id}/lock`, { method: 'POST' });
   },
+  convertDocumentSetToSalesOrder(
+    id: string,
+    input: { order_number: string; idempotency_key: string },
+  ): Promise<SalesOrderResponse> {
+    return request<SalesOrderResponse>(`/api/document-sets/${id}/sales-order`, {
+      method: 'POST',
+      body: input,
+    });
+  },
   exportDocumentSet(id: string, documentType: TradeDocumentType): Promise<TradeDocumentExport> {
     return request<TradeDocumentExport>(`/api/document-sets/${id}/exports/${documentType}`, {
       method: 'POST',
