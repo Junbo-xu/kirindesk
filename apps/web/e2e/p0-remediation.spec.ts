@@ -305,12 +305,11 @@ test('询盘草稿支持多产品行、并发恢复与提交', async ({ page, re
 
 test('报价任务网页覆盖幂等重试、录入、校正、历史与脱敏', async ({ page }) => {
   await loginPage(page, OWNER_EMAIL);
-  let firstList = true;
+  let simulateTimeout = true;
   await page.route('**/api/quote-tasks', async (route) => {
     const response = await route.fetch();
     const rows = (await response.json()) as Array<Record<string, unknown>>;
-    if (firstList) {
-      firstList = false;
+    if (simulateTimeout) {
       for (const row of rows) {
         if (row.id === procurementQuoteTaskId) {
           row.sanitization_status = 'timeout';
@@ -319,6 +318,10 @@ test('报价任务网页覆盖幂等重试、录入、校正、历史与脱敏',
       }
     }
     await route.fulfill({ response, json: rows });
+  });
+  await page.route(`**/api/quote-tasks/${procurementQuoteTaskId}/retry`, async (route) => {
+    simulateTimeout = false;
+    await route.continue();
   });
 
   await page.goto('/quote-tasks');
