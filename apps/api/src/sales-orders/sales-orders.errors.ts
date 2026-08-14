@@ -49,3 +49,19 @@ export class PiBackedOrderImmutableException extends ConflictException {
     super('A PI-backed order must be changed through its dedicated workflow');
   }
 }
+
+export class QuoteBackedOrderDeleteException extends ConflictException {
+  constructor() {
+    super('A quote-backed order cannot be deleted while its source link exists');
+  }
+}
+
+export class FulfillmentLockedOrderImmutableException extends ConflictException {
+  constructor() {
+    super({
+      statusCode: 409,
+      code: 'FULFILLMENT_LOCKED_ORDER_IMMUTABLE',
+      message: 'A fulfillment-locked sales order can no longer be edited or deleted',
+    });
+  }
+}

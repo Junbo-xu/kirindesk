@@ -27,6 +27,12 @@ export const NAVIGATION: NavigationGroup[] = [
       { label: '销售订单', to: '/orders', anyOf: ['orders:view'] },
       { label: '采购订单', to: '/purchase-orders', anyOf: ['procurement:view'] },
       { label: '履约与物流', to: '/fulfillment', anyOf: ['fulfillment:view'], workflow: true },
+      {
+        label: '报关资料',
+        to: '/customs',
+        anyOf: ['customs_declarations:view'],
+        workflow: true,
+      },
       { label: '样品单', to: '/samples', anyOf: ['sample_orders:view'], workflow: true },
       { label: '售后', to: '/after-sales', anyOf: ['after_sales:view'], workflow: true },
       {

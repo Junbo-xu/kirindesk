@@ -16,6 +16,8 @@ import {
   TEST_USER2_EMAIL,
   TEST_USER2_ID,
   TEST_USER3_EMAIL,
+  TEST_USER4_EMAIL,
+  TEST_USER4_ID,
   TEST_USER_EMAIL,
   TEST_USER_ID,
 } from './fixtures';
@@ -39,6 +41,7 @@ const PURCHASE_ITEM_ID = '98100000-0000-4000-8000-000000000001';
 const QC_FILE_ID = '99000000-0000-4000-8000-000000000001';
 const DELIVERY_FILE_ID = '99000000-0000-4000-8000-000000000002';
 const CUSTOMER_RECEIPT_ID = '99000000-0000-4000-8000-000000000003';
+const NONE_SCOPE_ROLE_ID = '99100000-0000-4000-8000-000000000001';
 
 describe('Stage 2D fulfillment (integration)', () => {
   let app: INestApplication;
@@ -46,6 +49,7 @@ describe('Stage 2D fulfillment (integration)', () => {
   let adminToken: string;
   let salesToken: string;
   let tenant2Token: string;
+  let noneScopeToken: string;
   let firstReceiptId: string;
   let firstReceiptItemId: string;
   let shipmentId: string;
@@ -276,6 +280,32 @@ describe('Stage 2D fulfillment (integration)', () => {
            VALUES ($1,$2,$3,$4,500,'USD',CURRENT_DATE,'bank_transfer','STAGE-2D-PAYMENT',$5)`,
           [CUSTOMER_RECEIPT_ID, TEST_TENANT_ID, PI_ID, SALES_ORDER_ID, TEST_USER2_ID],
         );
+        await client.query(
+          `INSERT INTO roles (id, tenant_id, name, is_system)
+           VALUES ($1,$2,'Fulfillment none-scope regression',false)`,
+          [NONE_SCOPE_ROLE_ID, TEST_TENANT_ID],
+        );
+        await client.query(
+          `INSERT INTO user_roles (tenant_id, user_id, role_id)
+           VALUES ($1,$2,$3)`,
+          [TEST_TENANT_ID, TEST_USER4_ID, NONE_SCOPE_ROLE_ID],
+        );
+        await client.query(
+          `INSERT INTO role_permissions (tenant_id, role_id, permission_id, data_scope)
+           SELECT $1,$2,id,'none' FROM permissions
+            WHERE code=ANY($3::text[])`,
+          [
+            TEST_TENANT_ID,
+            NONE_SCOPE_ROLE_ID,
+            [
+              'fulfillment:view',
+              'goods_receipts:manage',
+              'goods_receipts:confirm',
+              'shipments:manage',
+              'order_expenses:record',
+            ],
+          ],
+        );
         await client.query('COMMIT');
       } catch (error) {
         await client.query('ROLLBACK');
@@ -293,6 +323,7 @@ describe('Stage 2D fulfillment (integration)', () => {
     adminToken = await login(TEST_USER_EMAIL);
     salesToken = await login(TEST_USER2_EMAIL);
     tenant2Token = await login(TEST_USER3_EMAIL, TEST_TENANT2_SLUG);
+    noneScopeToken = await login(TEST_USER4_EMAIL);
   });
 
   afterAll(async () => {
@@ -367,6 +398,90 @@ describe('Stage 2D fulfillment (integration)', () => {
     expect(evidence).toEqual({ exception_type: 'quality_variance', status: 'open' });
   });
 
+  it.each(['none', 'unknown'])(
+    'fails closed for %s-scoped fulfillment permissions without mutating data',
+    async (dataScope) => {
+      await withAdmin(async (client) => {
+        await client.query(
+          `UPDATE role_permissions
+              SET data_scope = $1
+            WHERE tenant_id = $2 AND role_id = $3`,
+          [dataScope, TEST_TENANT_ID, NONE_SCOPE_ROLE_ID],
+        );
+      });
+
+      const before = await withAdmin(async (client) => {
+        const result = await client.query<{
+          receipts: number;
+          shipments: number;
+          expenses: number;
+        }>(
+          `SELECT
+           (SELECT count(*)::integer FROM goods_receipts WHERE sales_order_id=$1) AS receipts,
+           (SELECT count(*)::integer FROM shipments WHERE sales_order_id=$1) AS shipments,
+           (SELECT count(*)::integer FROM order_expenses WHERE sales_order_id=$1) AS expenses`,
+          [SALES_ORDER_ID],
+        );
+        return result.rows[0];
+      });
+
+      await request(app.getHttpServer())
+        .get(`/api/sales-orders/${SALES_ORDER_ID}/fulfillment`)
+        .set(bearer(noneScopeToken))
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${PURCHASE_ORDER_ID}/goods-receipts`)
+        .set(bearer(noneScopeToken))
+        .send({
+          batch_number: 'GR-NONE-SCOPE',
+          is_final_batch: false,
+          items: [{ purchase_order_item_id: PURCHASE_ITEM_ID, received_quantity: '1' }],
+        })
+        .expect(403);
+
+      await request(app.getHttpServer())
+        .post(`/api/goods-receipts/${firstReceiptId}/confirm`)
+        .set(bearer(noneScopeToken))
+        .send({ decision: 'accepted' })
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
+        .set(bearer(noneScopeToken))
+        .send({
+          idempotency_key: 'shipment:none-scope',
+          batch_number: 'SHIP-NONE-SCOPE',
+          carrier: 'DHL',
+          tracking_number: 'DHL-NONE-SCOPE',
+          items: [{ sales_order_item_id: SALES_ITEM_ID, quantity: '1' }],
+        })
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .post(`/api/sales-orders/${SALES_ORDER_ID}/expenses`)
+        .set(bearer(noneScopeToken))
+        .send({ expense_type: 'freight', amount: '1', currency: 'RMB' })
+        .expect(404);
+
+      const after = await withAdmin(async (client) => {
+        const result = await client.query<{
+          receipts: number;
+          shipments: number;
+          expenses: number;
+        }>(
+          `SELECT
+           (SELECT count(*)::integer FROM goods_receipts WHERE sales_order_id=$1) AS receipts,
+           (SELECT count(*)::integer FROM shipments WHERE sales_order_id=$1) AS shipments,
+           (SELECT count(*)::integer FROM order_expenses WHERE sales_order_id=$1) AS expenses`,
+          [SALES_ORDER_ID],
+        );
+        return result.rows[0];
+      });
+      expect(after).toEqual(before);
+    },
+  );
+
   it('persists final and over-receipt batches with quantity exceptions and auto confirmation', async () => {
     const second = await request(app.getHttpServer())
       .post(`/api/purchase-orders/${PURCHASE_ORDER_ID}/goods-receipts`)
@@ -436,6 +551,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:over',
         batch_number: 'SHIP-OVER',
         carrier: 'DHL',
         tracking_number: 'DHL-OVER',
@@ -448,6 +564,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:one',
         batch_number: 'SHIP-1',
         carrier: 'DHL',
         tracking_number: 'DHL-001',
@@ -509,6 +626,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/shipments/${shipmentId}/logistics-events`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:transit-one',
         event_type: 'in_transit',
         location: 'Shenzhen',
         description: 'Export scan',
@@ -528,7 +646,8 @@ describe('Stage 2D fulfillment (integration)', () => {
       .set(bearer(salesToken))
       .send({
         delivered_at: new Date(Date.now() + 2000).toISOString(),
-        proof_file_id: DELIVERY_FILE_ID,
+        received_by: 'Buyer Contact One',
+        attachment_file_ids: [DELIVERY_FILE_ID],
         note: 'Customer signed batch one',
       });
     expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
@@ -538,6 +657,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:two',
         batch_number: 'SHIP-2',
         carrier: 'FedEx',
         tracking_number: 'FEDEX-002',
@@ -565,11 +685,21 @@ describe('Stage 2D fulfillment (integration)', () => {
       .set(bearer(salesToken))
       .expect(200);
     await request(app.getHttpServer())
+      .post(`/api/shipments/${finalShipment.body.id}/logistics-events`)
+      .set(bearer(salesToken))
+      .send({
+        idempotency_key: 'shipment:stage2d:transit-two',
+        event_type: 'in_transit',
+        occurred_at: new Date(Date.now() + 2500).toISOString(),
+      })
+      .expect(201);
+    await request(app.getHttpServer())
       .post(`/api/shipments/${finalShipment.body.id}/deliver`)
       .set(bearer(salesToken))
       .send({
         delivered_at: new Date(Date.now() + 3000).toISOString(),
-        proof_file_id: DELIVERY_FILE_ID,
+        received_by: 'Buyer Contact Final',
+        attachment_file_ids: [DELIVERY_FILE_ID],
         note: 'Customer signed final batch',
       })
       .expect(200);

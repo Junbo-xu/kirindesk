@@ -170,6 +170,12 @@ export const DOCUMENT_WORKBENCH_PERMS = [
 
 export const DOCUMENT_FINANCIAL_PERMS = ['document_financials:view'] as const;
 
+export const CUSTOMS_DECLARATION_PERMS = [
+  'customs_declarations:view',
+  'customs_declarations:manage',
+  'customs_declarations:export',
+] as const;
+
 const STAGE_2A_PERMS: { code: string; moduleId: string }[] = [
   ...INQUIRY_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
   ...QUOTE_SELECTION_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
@@ -270,6 +276,7 @@ const SEED_PERMS: { code: string; moduleId: string }[] = [
     code,
     moduleId: code === 'product_fields:manage' ? SYSTEM_MODULE_ID : ORDERS_MODULE_ID,
   })),
+  ...CUSTOMS_DECLARATION_PERMS.map((code) => ({ code, moduleId: ORDERS_MODULE_ID })),
 ];
 
 interface RoleSpec {

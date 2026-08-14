@@ -3,9 +3,11 @@ import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
 import {
   ApiError,
+  Currency,
   ProductFieldRecord,
   ProductInput,
   ProductRecord,
+  SupplierResponse,
   TradeDocumentType,
 } from '../lib/types';
 
@@ -32,6 +34,7 @@ export function ProductCatalogPage() {
   const canManageFields = hasPermission('product_fields:manage');
   const canSeeCost = hasPermission('document_financials:view');
   const [products, setProducts] = useState<ProductRecord[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierResponse[]>([]);
   const [fields, setFields] = useState<ProductFieldRecord[]>([]);
   const [product, setProduct] = useState<ProductInput>(EMPTY_PRODUCT);
   const [thumbnail, setThumbnail] = useState<File | null>(null);
@@ -53,12 +56,16 @@ export function ProductCatalogPage() {
     setLoading(true);
     setError(null);
     try {
-      const [productResult, fieldResult] = await Promise.all([
+      const [productResult, fieldResult, supplierResult] = await Promise.all([
         apiClient.listProducts({ pageSize: 100 }),
         apiClient.listProductFields(),
+        canSeeCost
+          ? apiClient.listSuppliers({ pageSize: 100, status: 'active' })
+          : Promise.resolve({ data: [], page: 1, pageSize: 100, total: 0 }),
       ]);
       setProducts(productResult.data);
       setFields([...fieldResult.system, ...fieldResult.custom]);
+      setSuppliers(supplierResult.data);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : '加载产品库失败');
     } finally {
@@ -85,6 +92,11 @@ export function ProductCatalogPage() {
         unit: product.unit.trim(),
         ...(product.description?.trim() ? { description: product.description.trim() } : {}),
         ...(product.cost_unit_price ? { cost_unit_price: product.cost_unit_price } : {}),
+        ...(product.supplier_id ? { supplier_id: product.supplier_id } : {}),
+        ...(product.purchase_currency ? { purchase_currency: product.purchase_currency } : {}),
+        ...(product.purchase_unit_price
+          ? { purchase_unit_price: product.purchase_unit_price }
+          : {}),
         ...(product.weight_kg ? { weight_kg: product.weight_kg } : {}),
         ...(product.volume_cbm ? { volume_cbm: product.volume_cbm } : {}),
         ...(thumbnailFile ? { thumbnail_file_id: thumbnailFile.id } : {}),
@@ -270,16 +282,65 @@ export function ProductCatalogPage() {
               />
             </label>
             {canSeeCost && (
-              <label>
-                成本价
-                <input
-                  value={product.cost_unit_price ?? ''}
-                  onChange={(event) =>
-                    setProduct({ ...product, cost_unit_price: event.target.value })
-                  }
-                  style={{ width: '100%' }}
-                />
-              </label>
+              <>
+                <label>
+                  成本价
+                  <input
+                    value={product.cost_unit_price ?? ''}
+                    onChange={(event) =>
+                      setProduct({ ...product, cost_unit_price: event.target.value })
+                    }
+                    style={{ width: '100%' }}
+                  />
+                </label>
+                <label>
+                  默认供应商
+                  <select
+                    value={product.supplier_id ?? ''}
+                    onChange={(event) =>
+                      setProduct({ ...product, supplier_id: event.target.value || undefined })
+                    }
+                    style={{ width: '100%' }}
+                  >
+                    <option value="">未配置</option>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.company_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  采购币种
+                  <select
+                    value={product.purchase_currency ?? ''}
+                    onChange={(event) =>
+                      setProduct({
+                        ...product,
+                        purchase_currency: (event.target.value as Currency) || undefined,
+                      })
+                    }
+                    style={{ width: '100%' }}
+                  >
+                    <option value="">未配置</option>
+                    {(['RMB', 'USD', 'HKD', 'EUR'] as Currency[]).map((currency) => (
+                      <option key={currency} value={currency}>
+                        {currency}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  采购单价
+                  <input
+                    value={product.purchase_unit_price ?? ''}
+                    onChange={(event) =>
+                      setProduct({ ...product, purchase_unit_price: event.target.value })
+                    }
+                    style={{ width: '100%' }}
+                  />
+                </label>
+              </>
             )}
             <label>
               单件重量 kg
@@ -376,6 +437,7 @@ export function ProductCatalogPage() {
                 <th style={{ textAlign: 'left' }}>名称</th>
                 <th>售价</th>
                 {canSeeCost && <th>成本</th>}
+                {canSeeCost && <th>采购映射</th>}
                 <th>重量 / 体积</th>
                 <th>状态</th>
                 <th />
@@ -391,6 +453,13 @@ export function ProductCatalogPage() {
                   </td>
                   {canSeeCost && (
                     <td style={{ textAlign: 'center' }}>{record.cost_unit_price ?? '-'}</td>
+                  )}
+                  {canSeeCost && (
+                    <td style={{ textAlign: 'center' }}>
+                      {record.supplier_id
+                        ? `${suppliers.find((supplier) => supplier.id === record.supplier_id)?.company_name ?? record.supplier_id} / ${record.purchase_currency} ${record.purchase_unit_price}`
+                        : '-'}
+                    </td>
                   )}
                   <td style={{ textAlign: 'center' }}>
                     {record.weight_kg ?? '-'} kg / {record.volume_cbm ?? '-'} CBM

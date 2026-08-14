@@ -76,7 +76,9 @@ export class PurchaseOrdersService {
 
   private response(actor: RequestActor, row: PurchaseOrderRow): PurchaseOrderResponse {
     const includeSupplierIdentity =
-      row.source_procurement_request_id === null || actor.dataScope === 'all';
+      (row.source_procurement_request_id === null &&
+        row.source_sales_order_generation_id === null) ||
+      actor.dataScope === 'all';
     return toPurchaseOrderResponse(row, includeSupplierIdentity);
   }
 
@@ -120,13 +122,14 @@ export class PurchaseOrdersService {
       const lineTotal = computeLineTotal(item.quantity, item.unit_price);
       const { rows: inserted } = await client.query<OrderItemRow>(
         `INSERT INTO purchase_order_items
-           (tenant_id, order_id, line_no, description, product_code, unit,
+           (tenant_id, order_id, product_id, line_no, description, product_code, unit,
             quantity, unit_price, line_total, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
         [
           actor.tenantId,
           orderId,
+          item.product_id ?? null,
           lineNo,
           item.description,
           item.product_code ?? null,
@@ -319,7 +322,9 @@ export class PurchaseOrdersService {
       params.push(query.supplier_id);
       conditions.push(`supplier_id = $${params.length}`);
       if (this.restrictsToOwner(actor.dataScope)) {
-        conditions.push('source_procurement_request_id IS NULL');
+        conditions.push(
+          'source_procurement_request_id IS NULL AND source_sales_order_generation_id IS NULL',
+        );
       }
     }
     if (query.q) {
@@ -397,7 +402,7 @@ export class PurchaseOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
-        if (existing.source_procurement_request_id) {
+        if (existing.source_procurement_request_id || existing.source_sales_order_generation_id) {
           throw new GeneratedPurchaseOrderImmutableException();
         }
         const existingItems = await this.fetchItems(client, existing.id);
@@ -508,7 +513,7 @@ export class PurchaseOrdersService {
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
         const existing = await this.fetchInScope(client, actor, id);
-        if (existing.source_procurement_request_id) {
+        if (existing.source_procurement_request_id || existing.source_sales_order_generation_id) {
           throw new GeneratedPurchaseOrderImmutableException();
         }
         // Soft delete: set deleted_at, bump updated_at, leave status unchanged.

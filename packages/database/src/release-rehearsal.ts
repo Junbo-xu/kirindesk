@@ -12,9 +12,10 @@ const ZERO_HASH = '0'.repeat(64);
 const SOURCE_DATABASE_NAME = 'kirindesk_test';
 const POSTGRES_IMAGE = 'postgres:16.10-alpine';
 const BASELINE_MIGRATION = '049_stage_2e_finance_profit_commission.sql';
-const RELEASE_MIGRATION = '054_kir_33_stage_a_quote_order_link.sql';
+const RELEASE_MIGRATION = '057_customs_declarations.sql';
 const BASELINE_SOURCE_FILTERS: Record<string, string> = {
   finance_review_items: `subject_type <> 'after_sales_adjustment'`,
+  sales_order_purchase_orders: 'procurement_request_id IS NOT NULL',
 };
 const RELEASE_PERMISSION_CODES = [
   'products:view',

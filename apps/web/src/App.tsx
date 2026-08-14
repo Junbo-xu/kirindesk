@@ -57,6 +57,7 @@ import { AfterSalesPage } from './samples-after-sales/AfterSalesPage';
 import { DocumentWorkbenchPage } from './document-workbench/DocumentWorkbenchPage';
 import { ProductCatalogPage } from './document-workbench/ProductCatalogPage';
 import { PublicTrackingPage } from './document-workbench/PublicTrackingPage';
+import { CustomsDeclarationsPage } from './customs-declarations/CustomsDeclarationsPage';
 
 function sensitive(element: React.ReactNode) {
   return <SensitivePageWatermark>{element}</SensitivePageWatermark>;
@@ -98,6 +99,9 @@ export function App() {
               </Route>
               <Route element={<PermissionRoute permission="fulfillment:view" />}>
                 <Route path="/fulfillment" element={sensitive(<FulfillmentPage />)} />
+              </Route>
+              <Route element={<PermissionRoute permission="customs_declarations:view" />}>
+                <Route path="/customs" element={sensitive(<CustomsDeclarationsPage />)} />
               </Route>
               <Route element={<PermissionRoute permission="sample_orders:view" />}>
                 <Route path="/samples" element={sensitive(<SampleOrdersPage />)} />

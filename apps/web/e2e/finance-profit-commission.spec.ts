@@ -321,6 +321,7 @@ test.beforeAll(async ({ request }) => {
     await request.post(`/api/sales-orders/${salesOrderId}/shipments`, {
       headers: adminHeaders,
       data: {
+        idempotency_key: `shipment:finance:${fixtureKey}`,
         batch_number: `E2E-FIN-SHIP-${fixtureKey}`,
         carrier: 'DHL',
         tracking_number: `E2E-FIN-${fixtureKey}`,
@@ -362,11 +363,22 @@ test.beforeAll(async ({ request }) => {
     await request.post(`/api/shipments/${shipment.id}/dispatch`, { headers: adminHeaders }),
   );
   await json(
+    await request.post(`/api/shipments/${shipment.id}/logistics-events`, {
+      headers: adminHeaders,
+      data: {
+        idempotency_key: `shipment:finance:transit:${fixtureKey}`,
+        event_type: 'in_transit',
+        occurred_at: new Date(Date.now() + 500).toISOString(),
+      },
+    }),
+  );
+  await json(
     await request.post(`/api/shipments/${shipment.id}/deliver`, {
       headers: adminHeaders,
       data: {
         delivered_at: new Date(Date.now() + 1000).toISOString(),
-        proof_file_id: proof.id,
+        received_by: 'Finance E2E buyer',
+        attachment_file_ids: [proof.id],
         note: 'E2E finance delivery completed',
       },
     }),

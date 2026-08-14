@@ -34,6 +34,9 @@ interface ProductRow {
   default_currency: string;
   default_unit_price: string;
   cost_unit_price: string | null;
+  supplier_id: string | null;
+  purchase_currency: string | null;
+  purchase_unit_price: string | null;
   weight_kg: string | null;
   volume_cbm: string | null;
   thumbnail_file_id: string | null;
@@ -57,6 +60,7 @@ export interface ProductFieldRow {
 
 const PRODUCT_COLUMNS = `id, owner_user_id, sku, name, description, unit, hs_code,
   default_currency, default_unit_price::text, cost_unit_price::text,
+  supplier_id, purchase_currency, purchase_unit_price::text,
   weight_kg::text, volume_cbm::text, thumbnail_file_id, custom_values,
   active, created_at, updated_at`;
 
@@ -108,7 +112,14 @@ export class ProductsService {
       hs_code: row.hs_code,
       default_currency: row.default_currency,
       default_unit_price: row.default_unit_price,
-      ...(includeFinancials ? { cost_unit_price: row.cost_unit_price } : {}),
+      ...(includeFinancials
+        ? {
+            cost_unit_price: row.cost_unit_price,
+            supplier_id: row.supplier_id,
+            purchase_currency: row.purchase_currency,
+            purchase_unit_price: row.purchase_unit_price,
+          }
+        : {}),
       weight_kg: row.weight_kg,
       volume_cbm: row.volume_cbm,
       thumbnail_file_id: row.thumbnail_file_id,
@@ -122,7 +133,51 @@ export class ProductsService {
   private auditProjection(row: ProductRow) {
     const safe: Partial<ProductRow> = { ...row };
     delete safe.cost_unit_price;
+    delete safe.supplier_id;
+    delete safe.purchase_currency;
+    delete safe.purchase_unit_price;
     return safe;
+  }
+
+  private async validateProcurementMapping(
+    client: PoolClient,
+    actor: DocumentWorkbenchActor,
+    mapping: {
+      supplier_id: string | null;
+      purchase_currency: string | null;
+      purchase_unit_price: string | null;
+    },
+  ): Promise<void> {
+    const values = [mapping.supplier_id, mapping.purchase_currency, mapping.purchase_unit_price];
+    const populated = values.filter((value) => value !== null).length;
+    if (populated !== 0 && populated !== values.length) {
+      throw new InvalidDocumentWorkbenchDataException(
+        'Supplier, purchase currency, and purchase unit price must be provided together',
+        'INCOMPLETE_PRODUCT_PROCUREMENT_MAPPING',
+      );
+    }
+    if (populated === 0) return;
+    if (/^0+(?:\.0+)?$/.test(mapping.purchase_unit_price!)) {
+      throw new InvalidDocumentWorkbenchDataException(
+        'Purchase unit price must be greater than zero',
+        'INVALID_PURCHASE_UNIT_PRICE',
+      );
+    }
+    const params: unknown[] = [mapping.supplier_id];
+    let scope = '';
+    if (this.restrictsToOwner(actor.dataScope)) {
+      params.push(actor.userId);
+      scope = ` AND owner_user_id = $${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scope = ' AND false';
+    }
+    const supplier = await client.query(
+      `SELECT 1 FROM suppliers WHERE id=$1 AND deleted_at IS NULL${scope}`,
+      params,
+    );
+    if (supplier.rows.length === 0) {
+      throw new DocumentWorkbenchNotFoundException('Supplier');
+    }
   }
 
   private async validateCustomValues(
@@ -180,7 +235,10 @@ export class ProductsService {
   async create(actor: DocumentWorkbenchActor, dto: CreateProductDto) {
     const financialScope = await this.financialScope(actor);
     if (
-      dto.cost_unit_price !== undefined &&
+      (dto.cost_unit_price !== undefined ||
+        dto.supplier_id !== undefined ||
+        dto.purchase_currency !== undefined ||
+        dto.purchase_unit_price !== undefined) &&
       !this.scopeAllowsOwner(financialScope, actor, actor.userId)
     ) {
       throw new InvalidDocumentWorkbenchDataException('Cost price permission is required');
@@ -191,12 +249,18 @@ export class ProductsService {
         { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
         async (client) => {
           await this.validateCustomValues(client, dto.custom_values ?? {});
+          await this.validateProcurementMapping(client, actor, {
+            supplier_id: dto.supplier_id ?? null,
+            purchase_currency: dto.purchase_currency ?? null,
+            purchase_unit_price: dto.purchase_unit_price ?? null,
+          });
           const result = await client.query<ProductRow>(
             `INSERT INTO products
                (tenant_id, owner_user_id, sku, name, description, unit, hs_code,
-                default_currency, default_unit_price, cost_unit_price, weight_kg,
-                volume_cbm, thumbnail_file_id, custom_values)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                default_currency, default_unit_price, cost_unit_price, supplier_id,
+                purchase_currency, purchase_unit_price, weight_kg, volume_cbm,
+                thumbnail_file_id, custom_values)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
              RETURNING ${PRODUCT_COLUMNS}`,
             [
               actor.tenantId,
@@ -209,6 +273,9 @@ export class ProductsService {
               dto.default_currency,
               dto.default_unit_price,
               dto.cost_unit_price ?? null,
+              dto.supplier_id ?? null,
+              dto.purchase_currency ?? null,
+              dto.purchase_unit_price ?? null,
               dto.weight_kg ?? null,
               dto.volume_cbm ?? null,
               dto.thumbnail_file_id ?? null,
@@ -301,7 +368,10 @@ export class ProductsService {
         async (client) => {
           const before = await this.row(client, actor, id, true);
           if (
-            dto.cost_unit_price !== undefined &&
+            (dto.cost_unit_price !== undefined ||
+              dto.supplier_id !== undefined ||
+              dto.purchase_currency !== undefined ||
+              dto.purchase_unit_price !== undefined) &&
             !this.scopeAllowsOwner(financialScope, actor, before.owner_user_id)
           ) {
             throw new InvalidDocumentWorkbenchDataException('Cost price permission is required');
@@ -309,6 +379,17 @@ export class ProductsService {
           if (dto.custom_values !== undefined) {
             await this.validateCustomValues(client, dto.custom_values);
           }
+          await this.validateProcurementMapping(client, actor, {
+            supplier_id: dto.supplier_id === undefined ? before.supplier_id : dto.supplier_id,
+            purchase_currency:
+              dto.purchase_currency === undefined
+                ? before.purchase_currency
+                : dto.purchase_currency,
+            purchase_unit_price:
+              dto.purchase_unit_price === undefined
+                ? before.purchase_unit_price
+                : dto.purchase_unit_price,
+          });
           const columns = [
             'sku',
             'name',
@@ -318,6 +399,9 @@ export class ProductsService {
             'default_currency',
             'default_unit_price',
             'cost_unit_price',
+            'supplier_id',
+            'purchase_currency',
+            'purchase_unit_price',
             'weight_kg',
             'volume_cbm',
             'thumbnail_file_id',
