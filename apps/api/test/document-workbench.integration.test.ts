@@ -11,6 +11,7 @@ import { APP_POOL } from '../src/database/database.module';
 import {
   DOCUMENT_PDF_RENDERER,
   DocumentPdfRenderer,
+  PuppeteerDocumentPdfRenderer,
 } from '../src/document-workbench/document-pdf.renderer';
 import {
   DocumentRenderAssets,
@@ -61,8 +62,11 @@ describe('foreign trade document workbench (integration)', () => {
   let rawToken: string;
   let adminProductId: string;
   let adminImageId: string;
-  let conversionDocumentId: string;
-  let conversionOrderId: string;
+  let stageCOrderId: string;
+  let stageCOrderItemId: string;
+  let stageCProductId: string;
+  let stageCDocumentSetId: string;
+  let stageCDocumentVersion: number;
 
   function bearer(token: string) {
     return { Authorization: `Bearer ${token}` };
@@ -101,6 +105,9 @@ describe('foreign trade document workbench (integration)', () => {
                ('document_sets:view', 'all'),
                ('document_sets:manage', 'all'),
                ('document_financials:view', 'assigned'),
+               ('orders:view', 'all'),
+               ('orders:approve', 'all'),
+               ('procurement:approve', 'all'),
                ('audit_logs:view', 'all')
            ) AS grant_spec(code, data_scope)
            JOIN permissions permission ON permission.code = grant_spec.code`,
@@ -201,6 +208,7 @@ describe('foreign trade document workbench (integration)', () => {
       signature_file_id: document.signature_file_id ?? undefined,
       lines: document.lines.map((line: Record<string, any>) => ({
         id: line.id,
+        product_id: line.product_id ?? undefined,
         sku: line.sku,
         name: line.name,
         description: line.description ?? undefined,
@@ -527,13 +535,87 @@ describe('foreign trade document workbench (integration)', () => {
     expect(response.status).toBe(404);
   });
 
-  it('requires a customer and both document/order permissions for internal conversion', async () => {
+  it('rejects quote conversion when the customer is outside the order create scope', async () => {
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Out-of-scope conversion customer' });
+    expect(customer.status).toBe(201);
+    const created = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({
+        ...publicDocumentPayload('QT-CUSTOMER-SCOPE'),
+        customer_id: customer.body.id,
+      });
+    expect(created.status).toBe(201);
+
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      await admin.query(`UPDATE trade_document_sets SET owner_user_id=$1 WHERE id=$2`, [
+        TEST_USER2_ID,
+        created.body.document_set_id,
+      ]);
+    } finally {
+      await admin.end();
+    }
+
+    const visibleQuote = await request(app.getHttpServer())
+      .get(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(salesToken));
+    expect(visibleQuote.status).toBe(200);
+
+    const denied = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
+      .set(bearer(salesToken))
+      .send({
+        order_number: 'SO-CUSTOMER-SCOPE-DENIED',
+        idempotency_key: `quote-to-order:${created.body.document_set_id}`,
+        expected_version: created.body.source_version,
+      });
+    expect(denied.status).toBe(404);
+    expect(denied.body.message).toBe('Customer not found');
+
+    const verification = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await verification.connect();
+    try {
+      const stored = await verification.query<{
+        sales_order_id: string | null;
+        orders: string;
+        conversion_audits: string;
+      }>(
+        `SELECT document.sales_order_id,
+                (SELECT COUNT(*)::text FROM sales_orders order_record
+                  WHERE order_record.source_document_set_id=document.id) AS orders,
+                (SELECT COUNT(*)::text FROM audit_logs audit
+                  WHERE (audit.action='trade_document.converted_to_sales_order'
+                          AND audit.resource_id=document.id::text)
+                     OR (audit.action='sales_order.created_from_quote'
+                          AND audit.metadata_json->>'source_document_set_id'=document.id::text)
+                ) AS conversion_audits
+           FROM trade_document_sets document
+          WHERE document.id=$1`,
+        [created.body.document_set_id],
+      );
+      expect(stored.rows[0]).toEqual({
+        sales_order_id: null,
+        orders: '0',
+        conversion_audits: '0',
+      });
+    } finally {
+      await verification.end();
+    }
+  });
+
+  it('idempotently creates a sales order from the exact quote version without customer confirmation', async () => {
     const missingCustomer = await request(app.getHttpServer())
       .post(`/api/document-sets/${documentId}/sales-order`)
       .set(bearer(adminToken))
       .send({
         order_number: 'SO-MISSING-CUSTOMER',
-        idempotency_key: 'a1000000-0000-4000-8000-000000000001',
+        idempotency_key: `quote-to-order:${documentId}`,
+        expected_version: 1,
       });
     expect(missingCustomer.status).toBe(400);
     expect(missingCustomer.body.code).toBe('QUOTE_CUSTOMER_REQUIRED');
@@ -541,161 +623,959 @@ describe('foreign trade document workbench (integration)', () => {
     const customer = await request(app.getHttpServer())
       .post('/api/customers')
       .set(bearer(adminToken))
-      .send({ company_name: 'Stage A customer', country: 'DE' });
+      .send({ company_name: 'Quote conversion customer', country: 'DE' });
     expect(customer.status).toBe(201);
-    const quote = await request(app.getHttpServer())
+    const created = await request(app.getHttpServer())
       .post('/api/document-sets')
       .set(bearer(adminToken))
       .send({
         ...documentPayload(),
-        quote_number: 'QT-STAGE-A-CONVERSION',
         customer_id: customer.body.id,
+        quote_number: 'QT-CONVERT-001',
+        lines: [{ ...documentPayload().lines[0], product_id: adminProductId }],
       });
-    expect(quote.status).toBe(201);
-    conversionDocumentId = quote.body.document_set_id;
+    expect(created.status).toBe(201);
+    const nonFinancialProjection = await request(app.getHttpServer())
+      .get(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(viewerToken));
+    expect(nonFinancialProjection.status).toBe(200);
+    expect(nonFinancialProjection.body.lines[0].product_id).toBe(adminProductId);
+    expect(nonFinancialProjection.body.lines[0].cost_unit_price).toBeUndefined();
 
-    const missingOrderPermission = await request(app.getHttpServer())
-      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
-      .set(bearer(viewerToken))
-      .send({
-        order_number: 'SO-STAGE-A-DENIED',
-        idempotency_key: 'a1000000-0000-4000-8000-000000000002',
-      });
-    expect(missingOrderPermission.status).toBe(403);
+    const conversionInput = {
+      order_number: 'SO-CONVERT-001',
+      idempotency_key: `quote-to-order:${created.body.document_set_id}`,
+      expected_version: created.body.source_version,
+    };
+    const stale = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
+      .set(bearer(adminToken))
+      .send({ ...conversionInput, expected_version: 99 });
+    expect(stale.status).toBe(409);
+    expect(stale.body.code).toBe('DOCUMENT_VERSION_CONFLICT');
 
     const crossTenant = await request(app.getHttpServer())
-      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
       .set(bearer(tenant2Token))
-      .send({
-        order_number: 'SO-STAGE-A-CROSS-TENANT',
-        idempotency_key: 'a1000000-0000-4000-8000-000000000003',
-      });
+      .send(conversionInput);
     expect(crossTenant.status).toBe(404);
-  });
+    const outOfOwnerScope = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
+      .set(bearer(salesToken))
+      .send(conversionInput);
+    expect(outOfOwnerScope.status).toBe(404);
 
-  it('idempotently creates a draft sales order without customer confirmation', async () => {
-    const payload = {
-      order_number: 'SO-STAGE-A-001',
-      idempotency_key: 'a1000000-0000-4000-8000-000000000004',
-    };
-    const created = await request(app.getHttpServer())
-      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+    const converted = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
       .set(bearer(adminToken))
-      .send(payload);
-    expect(created.status).toBe(201);
-    conversionOrderId = created.body.id;
-    expect(created.body).toMatchObject({
-      order_number: payload.order_number,
-      status: 'draft',
-      currency: 'USD',
-      total_amount: '1184.30',
-      source_quote_id: conversionDocumentId,
-      source_quote_version: 1,
-      source_quote_number: 'QT-STAGE-A-CONVERSION',
+      .send(conversionInput);
+    expect(converted.status).toBe(200);
+    expect(converted.body.idempotent).toBe(false);
+    expect(converted.body.source_quote).toEqual({
+      document_set_id: created.body.document_set_id,
+      quote_number: 'QT-CONVERT-001',
+      version: 1,
     });
-    expect(created.body.items).toHaveLength(1);
-    expect(created.body.items[0]).toMatchObject({
-      description: 'Steel bottle',
-      product_code: 'BOTTLE-750',
+    expect(converted.body.sales_order.total_amount).toBe('1184.30');
+    expect(converted.body.sales_order.source_document_set_id).toBe(created.body.document_set_id);
+    expect(converted.body.sales_order.source_quote_version).toBe(1);
+    expect(converted.body.sales_order.items[0]).toMatchObject({
+      product_id: adminProductId,
+      source_document_line_id: created.body.lines[0].id,
       quantity: '100.000',
       unit_price: '12.3400',
+      line_total: '1234.00',
     });
-    expect(JSON.stringify(created.body)).not.toContain('source_quote_snapshot');
-    expect(JSON.stringify(created.body)).not.toContain('7.8900');
+    const safeResponse = JSON.stringify(converted.body);
+    expect(safeResponse).not.toContain('source_quote_snapshot');
+    expect(safeResponse).not.toContain('cost_unit_price');
+    expect(safeResponse).not.toContain('internal_expenses');
+    expect(safeResponse).not.toContain('7.8900');
 
-    const replay = await request(app.getHttpServer())
-      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
+    const retried = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
       .set(bearer(adminToken))
-      .send(payload);
-    expect(replay.status).toBe(201);
-    expect(replay.body.id).toBe(conversionOrderId);
+      .send(conversionInput);
+    expect(retried.status).toBe(200);
+    expect(retried.body.idempotent).toBe(true);
+    expect(retried.body.sales_order.id).toBe(converted.body.sales_order.id);
 
-    const retryWithNewRequestKey = await request(app.getHttpServer())
-      .post(`/api/document-sets/${conversionDocumentId}/sales-order`)
-      .set(bearer(adminToken))
-      .send({
-        order_number: 'SO-STAGE-A-RETRY-IGNORED',
-        idempotency_key: 'a1000000-0000-4000-8000-000000000005',
-      });
-    expect(retryWithNewRequestKey.status).toBe(201);
-    expect(retryWithNewRequestKey.body.id).toBe(conversionOrderId);
-
-    const quote = await request(app.getHttpServer())
-      .get(`/api/document-sets/${conversionDocumentId}`)
+    const linkedDocument = await request(app.getHttpServer())
+      .get(`/api/document-sets/${created.body.document_set_id}`)
       .set(bearer(adminToken));
-    expect(quote.status).toBe(200);
-    expect(quote.body.sales_order_id).toBe(conversionOrderId);
-
-    const order = await request(app.getHttpServer())
-      .get(`/api/sales-orders/${conversionOrderId}`)
+    expect(linkedDocument.status).toBe(200);
+    expect(linkedDocument.body.sales_order_id).toBe(converted.body.sales_order.id);
+    const linkedOrder = await request(app.getHttpServer())
+      .get(`/api/sales-orders/${converted.body.sales_order.id}`)
       .set(bearer(adminToken));
-    expect(order.status).toBe(200);
-    expect(order.body.source_quote_id).toBe(conversionDocumentId);
-    expect(order.body.source_quote_version).toBe(1);
-    expect(JSON.stringify(order.body)).not.toContain('source_quote_snapshot');
-    expect(JSON.stringify(order.body)).not.toContain('7.8900');
-
-    const auditList = await request(app.getHttpServer())
-      .get(
-        `/api/audit-logs?action=trade_document.converted_to_sales_order&resourceId=${conversionDocumentId}&pageSize=1`,
-      )
-      .set(bearer(viewerToken));
-    expect(auditList.status).toBe(200);
-    expect(auditList.body.data).toHaveLength(1);
-    const auditDetail = await request(app.getHttpServer())
-      .get(`/api/audit-logs/${auditList.body.data[0].id}`)
-      .set(bearer(viewerToken));
-    expect(auditDetail.status).toBe(200);
-    expect(JSON.stringify(auditDetail.body)).not.toContain('source_quote_snapshot');
-    expect(JSON.stringify(auditDetail.body)).not.toContain('cost_unit_price');
-    expect(JSON.stringify(auditDetail.body)).not.toContain('7.8900');
-  });
-
-  it('preserves the exact source version and financial snapshot outside public responses', async () => {
-    const quoteBefore = await request(app.getHttpServer())
-      .get(`/api/document-sets/${conversionDocumentId}`)
+    expect(linkedOrder.status).toBe(200);
+    expect(linkedOrder.body.source_document_set_id).toBe(created.body.document_set_id);
+    expect(JSON.stringify(linkedOrder.body)).not.toContain('source_quote_snapshot');
+    const deleteLinkedOrder = await request(app.getHttpServer())
+      .delete(`/api/sales-orders/${converted.body.sales_order.id}`)
       .set(bearer(adminToken));
-    const updated = await request(app.getHttpServer())
-      .patch(`/api/document-sets/${conversionDocumentId}`)
+    expect(deleteLinkedOrder.status).toBe(409);
+
+    const revisedQuote = await request(app.getHttpServer())
+      .patch(`/api/document-sets/${created.body.document_set_id}`)
       .set(bearer(adminToken))
       .send({
-        ...updatePayloadFromDocument(quoteBefore.body),
-        terms: 'Updated after order conversion',
+        ...updatePayloadFromDocument(linkedDocument.body),
+        lines: [
+          {
+            ...updatePayloadFromDocument(linkedDocument.body).lines[0],
+            unit_price: '99.9999',
+          },
+        ],
       });
-    expect(updated.status).toBe(200);
-    expect(updated.body.source_version).toBe(2);
+    expect(revisedQuote.status).toBe(200);
+    expect(revisedQuote.body.source_version).toBe(2);
+    expect(revisedQuote.body.sales_order_id).toBe(converted.body.sales_order.id);
 
     const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
     await admin.connect();
     try {
       const stored = await admin.query<{
         source_quote_version: number;
-        source_quote_snapshot: {
-          source_version: number;
-          lines: Array<{ cost_unit_price: string | null }>;
-        };
+        source_price: string;
+        source_cost: string;
+        item_source_price: string;
         orders: string;
-        conversion_audits: string;
+        create_audits: string;
+        audit_payload: string;
       }>(
         `SELECT order_record.source_quote_version,
-                order_record.source_quote_snapshot,
-                (SELECT COUNT(*)::text FROM sales_orders WHERE source_quote_id = $1::uuid) AS orders,
-                (SELECT COUNT(*)::text FROM audit_logs
-                  WHERE resource_id = $1::text
-                    AND action = 'trade_document.converted_to_sales_order')
-                  AS conversion_audits
+                order_record.source_quote_snapshot #>> '{lines,0,unit_price}' AS source_price,
+                order_record.source_quote_snapshot #>> '{lines,0,cost_unit_price}' AS source_cost,
+                item.source_line_snapshot #>> '{unit_price}' AS item_source_price,
+                (SELECT COUNT(*)::text FROM sales_orders candidate
+                  WHERE candidate.source_document_set_id=$1) AS orders,
+                (SELECT COUNT(*)::text FROM audit_logs audit
+                  WHERE audit.action='sales_order.created_from_quote'
+                    AND audit.resource_id=order_record.id::text) AS create_audits,
+                (SELECT COALESCE(string_agg(audit.after_json::text, ''), '') FROM audit_logs audit
+                  WHERE audit.resource_id IN ($1::text, order_record.id::text)) AS audit_payload
            FROM sales_orders order_record
-          WHERE order_record.id = $2`,
-        [conversionDocumentId, conversionOrderId],
+           JOIN sales_order_items item ON item.order_id=order_record.id AND item.deleted_at IS NULL
+          WHERE order_record.id=$2`,
+        [created.body.document_set_id, converted.body.sales_order.id],
       );
-      expect(stored.rows[0].source_quote_version).toBe(1);
-      expect(stored.rows[0].source_quote_snapshot.source_version).toBe(1);
-      expect(stored.rows[0].source_quote_snapshot.lines[0].cost_unit_price).toBe('7.8900');
-      expect(stored.rows[0].orders).toBe('1');
-      expect(stored.rows[0].conversion_audits).toBe('1');
+      expect(stored.rows[0]).toMatchObject({
+        source_quote_version: 1,
+        source_price: '12.3400',
+        source_cost: '7.8900',
+        item_source_price: '12.3400',
+        orders: '1',
+        create_audits: '1',
+      });
+      expect(stored.rows[0].audit_payload).not.toContain('cost_unit_price');
+      expect(stored.rows[0].audit_payload).not.toContain('internal_expenses');
+      await expect(
+        admin.query(`UPDATE sales_orders SET source_quote_version=99 WHERE id=$1`, [
+          converted.body.sales_order.id,
+        ]),
+      ).rejects.toThrow('sales order quote source snapshot is immutable');
     } finally {
       await admin.end();
     }
+  });
+
+  it('links a locked quote without changing its immutable locked snapshot', async () => {
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Locked quote customer' });
+    const created = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({
+        ...publicDocumentPayload('QT-LOCKED-CONVERT'),
+        customer_id: customer.body.id,
+      });
+    const locked = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/lock`)
+      .set(bearer(adminToken));
+    expect(locked.status).toBe(201);
+    const converted = await request(app.getHttpServer())
+      .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
+      .set(bearer(adminToken))
+      .send({
+        order_number: 'SO-LOCKED-CONVERT',
+        idempotency_key: `quote-to-order:${created.body.document_set_id}`,
+        expected_version: 1,
+      });
+    expect(converted.status).toBe(200);
+    expect(converted.body.sales_order.total_amount).toBe('10.00');
+
+    const linked = await request(app.getHttpServer())
+      .get(`/api/document-sets/${created.body.document_set_id}`)
+      .set(bearer(adminToken));
+    expect(linked.body.status).toBe('locked');
+    expect(linked.body.sales_order_id).toBe(converted.body.sales_order.id);
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      const stored = await admin.query<{
+        locked_sales_order_id: string | null;
+        source_status: string;
+      }>(
+        `SELECT document.locked_snapshot #>> '{sales_order_id}' AS locked_sales_order_id,
+                order_record.source_quote_snapshot #>> '{status}' AS source_status
+           FROM trade_document_sets document
+           JOIN sales_orders order_record ON order_record.id=document.sales_order_id
+          WHERE document.id=$1`,
+        [created.body.document_set_id],
+      );
+      expect(stored.rows[0]).toEqual({ locked_sales_order_id: null, source_status: 'locked' });
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('rolls back quote conversion when the audit chain cannot be appended', async () => {
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Conversion rollback customer' });
+    const created = await request(app.getHttpServer())
+      .post('/api/document-sets')
+      .set(bearer(adminToken))
+      .send({
+        ...publicDocumentPayload('QT-CONVERT-ROLLBACK'),
+        customer_id: customer.body.id,
+      });
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      await admin.query(`
+        CREATE FUNCTION fail_quote_conversion_audit() RETURNS trigger AS $$
+        BEGIN
+          IF NEW.action = 'sales_order.created_from_quote' THEN
+            RAISE EXCEPTION 'forced quote conversion audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+        CREATE TRIGGER fail_quote_conversion_audit
+          BEFORE INSERT ON audit_logs
+          FOR EACH ROW EXECUTE FUNCTION fail_quote_conversion_audit();
+      `);
+      const failed = await request(app.getHttpServer())
+        .post(`/api/document-sets/${created.body.document_set_id}/sales-order`)
+        .set(bearer(adminToken))
+        .send({
+          order_number: 'SO-CONVERT-ROLLBACK',
+          idempotency_key: `quote-to-order:${created.body.document_set_id}`,
+          expected_version: 1,
+        });
+      expect(failed.status).toBe(500);
+    } finally {
+      await admin.query(`DROP TRIGGER IF EXISTS fail_quote_conversion_audit ON audit_logs`);
+      await admin.query(`DROP FUNCTION IF EXISTS fail_quote_conversion_audit()`);
+    }
+    try {
+      const rolledBack = await admin.query<{ sales_order_id: string | null; orders: string }>(
+        `SELECT document.sales_order_id,
+                (SELECT COUNT(*)::text FROM sales_orders WHERE order_number='SO-CONVERT-ROLLBACK') AS orders
+           FROM trade_document_sets document
+          WHERE document.id=$1`,
+        [created.body.document_set_id],
+      );
+      expect(rolledBack.rows[0]).toEqual({ sales_order_id: null, orders: '0' });
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('generates and refreshes versioned order documents, then locks the order snapshot', async () => {
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage B document customer', country: 'DE' });
+    const product = await request(app.getHttpServer())
+      .post('/api/products')
+      .set(bearer(adminToken))
+      .send({
+        sku: 'STAGE-B-DOC',
+        name: 'Stage B document product',
+        unit: 'pcs',
+        default_currency: 'USD',
+        default_unit_price: '25.0000',
+        cost_unit_price: '11.0000',
+        weight_kg: '2.5000',
+        volume_cbm: '0.020000',
+      });
+    expect(product.status).toBe(201);
+    const order = await request(app.getHttpServer())
+      .post('/api/sales-orders')
+      .set(bearer(adminToken))
+      .send({
+        customer_id: customer.body.id,
+        order_number: 'SO-STAGE-B-DOC',
+        currency: 'USD',
+        items: [
+          {
+            product_id: product.body.id,
+            description: 'Stage B document product',
+            product_code: 'STAGE-B-DOC',
+            unit: 'pcs',
+            quantity: '2.000',
+            unit_price: '25.0000',
+          },
+        ],
+      });
+    expect(order.status).toBe(201);
+
+    const firstSync = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v1`,
+        expected_updated_at: order.body.updated_at,
+      });
+    expect(firstSync.status).toBe(200);
+    expect(firstSync.body).toMatchObject({
+      idempotent: false,
+      refreshed: false,
+      preserved_export_count: 0,
+      document_types: ['pi', 'sc', 'ci', 'pl'],
+    });
+    expect(firstSync.body.document.sales_order_id).toBe(order.body.id);
+    expect(firstSync.body.document.source_version).toBe(1);
+    expect(firstSync.body.document.lines[0]).toMatchObject({
+      product_id: product.body.id,
+      unit_price: '25.0000',
+      cost_unit_price: '11.0000',
+    });
+    const realPdf = await new PuppeteerDocumentPdfRenderer().render(
+      firstSync.body.document as PublicDocumentSnapshot,
+      'ci',
+      { thumbnails: {} },
+    );
+    expect(realPdf.subarray(0, 5).equals(Buffer.from('%PDF-'))).toBe(true);
+    expect(realPdf.length).toBeGreaterThan(1000);
+
+    const exported = await request(app.getHttpServer())
+      .post(`/api/document-sets/${firstSync.body.document.document_set_id}/exports/ci`)
+      .set(bearer(adminToken));
+    expect(exported.status).toBe(201);
+    expect(exported.body.source_version).toBe(1);
+
+    const updatedOrder = await request(app.getHttpServer())
+      .patch(`/api/sales-orders/${order.body.id}`)
+      .set(bearer(adminToken))
+      .send({
+        currency: 'USD',
+        items: [
+          {
+            product_id: product.body.id,
+            description: 'Stage B document product',
+            product_code: 'STAGE-B-DOC',
+            unit: 'pcs',
+            quantity: '3.000',
+            unit_price: '30.0000',
+          },
+        ],
+      });
+    expect(updatedOrder.status).toBe(200);
+    const refreshed = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v2`,
+        expected_updated_at: updatedOrder.body.updated_at,
+      });
+    expect(refreshed.status).toBe(200);
+    expect(refreshed.body).toMatchObject({
+      idempotent: false,
+      refreshed: true,
+      preserved_export_count: 1,
+      result_document_version: 2,
+    });
+    expect(refreshed.body.document.lines[0]).toMatchObject({
+      quantity: '3.000',
+      unit_price: '30.0000',
+    });
+
+    const retried = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v2`,
+        expected_updated_at: updatedOrder.body.updated_at,
+      });
+    expect(retried.status).toBe(200);
+    expect(retried.body.idempotent).toBe(true);
+    expect(retried.body.result_document_version).toBe(2);
+
+    const locked = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/fulfillment-lock`)
+      .set(bearer(adminToken))
+      .send({ expected_updated_at: updatedOrder.body.updated_at });
+    expect(locked.status).toBe(200);
+    expect(locked.body.idempotent).toBe(false);
+    expect(locked.body.sales_order.fulfillment_locked_at).toBeTruthy();
+    const repeatedLock = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/fulfillment-lock`)
+      .set(bearer(adminToken))
+      .send({ expected_updated_at: updatedOrder.body.updated_at });
+    expect(repeatedLock.status).toBe(200);
+    expect(repeatedLock.body.idempotent).toBe(true);
+
+    const rejectedMutation = await request(app.getHttpServer())
+      .patch(`/api/sales-orders/${order.body.id}`)
+      .set(bearer(adminToken))
+      .send({ notes: 'must not mutate locked order' });
+    expect(rejectedMutation.status).toBe(409);
+    expect(rejectedMutation.body.code).toBe('FULFILLMENT_LOCKED_ORDER_IMMUTABLE');
+
+    const lockedSync = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:locked`,
+        expected_updated_at: locked.body.sales_order.updated_at,
+      });
+    expect(lockedSync.status).toBe(200);
+    expect(lockedSync.body.source_order.locked).toBe(true);
+    expect(lockedSync.body.document.source_version).toBe(3);
+    stageCOrderId = order.body.id;
+    stageCOrderItemId = updatedOrder.body.items[0].id;
+    stageCProductId = product.body.id;
+    stageCDocumentSetId = lockedSync.body.document.document_set_id;
+    stageCDocumentVersion = lockedSync.body.document.source_version;
+
+    const replayedFirstSync = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v1`,
+        expected_updated_at: locked.body.sales_order.updated_at,
+      });
+    expect(replayedFirstSync.status).toBe(200);
+    expect(replayedFirstSync.body).toMatchObject({
+      idempotent: true,
+      refreshed: false,
+      preserved_export_count: 0,
+      result_document_version: 1,
+      source_order: {
+        sales_order_id: order.body.id,
+        updated_at: order.body.updated_at,
+        locked: false,
+      },
+    });
+    expect(replayedFirstSync.body.document).toEqual(firstSync.body.document);
+    expect(replayedFirstSync.body.document.source_version).toBe(1);
+    expect(replayedFirstSync.body.document.lines[0]).toMatchObject({
+      product_id: product.body.id,
+      quantity: '2.000',
+      unit_price: '25.0000',
+      cost_unit_price: '11.0000',
+    });
+
+    const redactedReplay = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/document-set`)
+      .set(bearer(viewerToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v1`,
+        expected_updated_at: locked.body.sales_order.updated_at,
+      });
+    expect(redactedReplay.status).toBe(200);
+    expect(redactedReplay.body.document.source_version).toBe(1);
+    expect(redactedReplay.body.document.pricing_mode).toBeUndefined();
+    expect(redactedReplay.body.document.internal_totals).toBeUndefined();
+    expect(redactedReplay.body.document.lines[0].cost_unit_price).toBeUndefined();
+    expect(JSON.stringify(redactedReplay.body)).not.toContain('11.0000');
+
+    const otherOrder = await request(app.getHttpServer())
+      .post('/api/sales-orders')
+      .set(bearer(adminToken))
+      .send({
+        customer_id: customer.body.id,
+        order_number: 'SO-STAGE-B-DOC-OTHER',
+        currency: 'USD',
+        items: [
+          {
+            product_id: product.body.id,
+            description: 'Stage B document product',
+            product_code: 'STAGE-B-DOC',
+            unit: 'pcs',
+            quantity: '1.000',
+            unit_price: '25.0000',
+          },
+        ],
+      });
+    expect(otherOrder.status).toBe(201);
+    const reusedAcrossOrders = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${otherOrder.body.id}/document-set`)
+      .set(bearer(adminToken))
+      .send({
+        idempotency_key: `order-documents:${order.body.id}:v1`,
+        expected_updated_at: otherOrder.body.updated_at,
+      });
+    expect(reusedAcrossOrders.status).toBe(409);
+    expect(reusedAcrossOrders.body.code).toBe('IDEMPOTENCY_KEY_REUSED');
+
+    const archived = await request(app.getHttpServer())
+      .get(`/api/document-sets/${firstSync.body.document.document_set_id}/exports`)
+      .set(bearer(adminToken));
+    expect(archived.status).toBe(200);
+    expect(archived.body).toHaveLength(1);
+    expect(archived.body[0].source_version).toBe(1);
+    renderer.snapshots = [];
+    storage.objects.clear();
+  });
+
+  it('blocks incomplete mappings, then idempotently splits purchase orders with approval', async () => {
+    const supplierOne = await request(app.getHttpServer())
+      .post('/api/suppliers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage B supplier one' });
+    const supplierTwo = await request(app.getHttpServer())
+      .post('/api/suppliers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage B supplier two' });
+    expect(supplierOne.status).toBe(201);
+    expect(supplierTwo.status).toBe(201);
+    const incompleteProduct = await request(app.getHttpServer())
+      .post('/api/products')
+      .set(bearer(adminToken))
+      .send({
+        sku: 'STAGE-B-PO-1',
+        name: 'Stage B procurement product one',
+        unit: 'pcs',
+        default_currency: 'USD',
+        default_unit_price: '9.0000',
+        cost_unit_price: '4.0000',
+      });
+    const mappedProduct = await request(app.getHttpServer())
+      .post('/api/products')
+      .set(bearer(adminToken))
+      .send({
+        sku: 'STAGE-B-PO-2',
+        name: 'Stage B procurement product two',
+        unit: 'pcs',
+        default_currency: 'USD',
+        default_unit_price: '12.0000',
+        cost_unit_price: '6.0000',
+        supplier_id: supplierTwo.body.id,
+        purchase_currency: 'USD',
+        purchase_unit_price: '5.5000',
+      });
+    expect(incompleteProduct.status).toBe(201);
+    expect(mappedProduct.status).toBe(201);
+
+    const customer = await request(app.getHttpServer())
+      .post('/api/customers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage B procurement customer' });
+    const order = await request(app.getHttpServer())
+      .post('/api/sales-orders')
+      .set(bearer(adminToken))
+      .send({
+        customer_id: customer.body.id,
+        order_number: 'SO-STAGE-B-PO',
+        currency: 'USD',
+        items: [
+          {
+            product_id: incompleteProduct.body.id,
+            description: 'Product one',
+            product_code: 'STAGE-B-PO-1',
+            unit: 'pcs',
+            quantity: '2.000',
+            unit_price: '9.0000',
+          },
+          {
+            product_id: mappedProduct.body.id,
+            description: 'Product two',
+            product_code: 'STAGE-B-PO-2',
+            unit: 'pcs',
+            quantity: '3.000',
+            unit_price: '12.0000',
+          },
+        ],
+      });
+    const locked = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/fulfillment-lock`)
+      .set(bearer(adminToken))
+      .send({ expected_updated_at: order.body.updated_at });
+    expect(locked.status).toBe(200);
+
+    const generationKey = `order-purchase-orders:${order.body.id}`;
+    const blocked = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/purchase-orders/generate`)
+      .set(bearer(adminToken))
+      .send({ idempotency_key: generationKey });
+    expect(blocked.status).toBe(400);
+    expect(blocked.body.code).toBe('PROCUREMENT_MAPPING_INCOMPLETE');
+    expect(blocked.body.missing).toEqual([
+      {
+        sales_order_item_id: order.body.items[0].id,
+        line_no: 1,
+        product_id: incompleteProduct.body.id,
+        product_code: 'STAGE-B-PO-1',
+        missing_fields: ['supplier_id', 'purchase_currency', 'purchase_unit_price'],
+      },
+    ]);
+
+    const mapped = await request(app.getHttpServer())
+      .patch(`/api/products/${incompleteProduct.body.id}`)
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: supplierOne.body.id,
+        purchase_currency: 'RMB',
+        purchase_unit_price: '3.2500',
+      });
+    expect(mapped.status).toBe(200);
+    const generated = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/purchase-orders/generate`)
+      .set(bearer(adminToken))
+      .send({ idempotency_key: generationKey });
+    expect(generated.status).toBe(200);
+    expect(generated.body.idempotent).toBe(false);
+    expect(generated.body.purchase_orders).toHaveLength(2);
+    expect(
+      generated.body.purchase_orders
+        .map(
+          (purchaseOrder: { currency: string; total_amount: string }) =>
+            `${purchaseOrder.currency}:${purchaseOrder.total_amount}`,
+        )
+        .sort(),
+    ).toEqual(['RMB:6.50', 'USD:16.50']);
+
+    const retried = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/purchase-orders/generate`)
+      .set(bearer(adminToken))
+      .send({ idempotency_key: generationKey });
+    expect(retried.status).toBe(200);
+    expect(retried.body.idempotent).toBe(true);
+    expect(
+      retried.body.purchase_orders.map((purchaseOrder: { id: string }) => purchaseOrder.id),
+    ).toEqual(
+      generated.body.purchase_orders.map((purchaseOrder: { id: string }) => purchaseOrder.id),
+    );
+
+    const crossTenant = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${order.body.id}/purchase-orders/generate`)
+      .set(bearer(tenant2Token))
+      .send({ idempotency_key: `tenant-two:${order.body.id}` });
+    expect(crossTenant.status).toBe(404);
+
+    const firstPurchaseOrderId = generated.body.purchase_orders[0].id;
+    const submitted = await request(app.getHttpServer())
+      .post(`/api/purchase-orders/${firstPurchaseOrderId}/submit`)
+      .set(bearer(adminToken));
+    expect(submitted.status).toBe(200);
+    expect(submitted.body.status).toBe('pending_approval');
+    const approved = await request(app.getHttpServer())
+      .post(`/api/purchase-orders/${firstPurchaseOrderId}/approve`)
+      .set(bearer(viewerToken))
+      .send({ reason: 'Independent Stage B approval' });
+    expect(approved.status).toBe(200);
+    expect(approved.body.status).toBe('approved');
+
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      const stored = await admin.query<{
+        generations: string;
+        purchase_orders: string;
+        audit_payload: string;
+      }>(
+        `SELECT
+           (SELECT COUNT(*)::text FROM sales_order_purchase_generations
+             WHERE sales_order_id=$1) AS generations,
+           (SELECT COUNT(*)::text FROM purchase_orders
+             WHERE source_sales_order_generation_id=generated.id) AS purchase_orders,
+           (SELECT COALESCE(string_agg(COALESCE(audit.after_json::text, '') ||
+                                       COALESCE(audit.metadata_json::text, ''), ''), '')
+              FROM audit_logs audit
+             WHERE audit.action IN ('purchase_order.generated_from_sales_order',
+                                    'sales_order.purchase_orders_generated')
+               AND (audit.resource_id=$1::text
+                    OR audit.after_json->>'sales_order_id'=$1::text)) AS audit_payload
+          FROM sales_order_purchase_generations generated
+         WHERE generated.sales_order_id=$1`,
+        [order.body.id],
+      );
+      expect(stored.rows[0].generations).toBe('1');
+      expect(stored.rows[0].purchase_orders).toBe('2');
+      expect(stored.rows[0].audit_payload).not.toContain('purchase_unit_price');
+      expect(stored.rows[0].audit_payload).not.toContain('3.2500');
+      expect(stored.rows[0].audit_payload).not.toContain('5.5000');
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('drives an audited partial shipment from a locked packing-list version', async () => {
+    const submittedOrder = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/submit`)
+      .set(bearer(adminToken));
+    expect(submittedOrder.status, JSON.stringify(submittedOrder.body)).toBe(200);
+    const approvedOrder = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/approve`)
+      .set(bearer(viewerToken))
+      .send({ reason: 'Independent sales approval before packing' });
+    expect(approvedOrder.status, JSON.stringify(approvedOrder.body)).toBe(200);
+    expect(approvedOrder.body.status).toBe('approved');
+
+    const supplier = await request(app.getHttpServer())
+      .post('/api/suppliers')
+      .set(bearer(adminToken))
+      .send({ company_name: 'Stage C packing supplier' });
+    expect(supplier.status).toBe(201);
+    const mapped = await request(app.getHttpServer())
+      .patch(`/api/products/${stageCProductId}`)
+      .set(bearer(adminToken))
+      .send({
+        supplier_id: supplier.body.id,
+        purchase_currency: 'USD',
+        purchase_unit_price: '10.0000',
+      });
+    expect(mapped.status, JSON.stringify(mapped.body)).toBe(200);
+    const generated = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/purchase-orders/generate`)
+      .set(bearer(adminToken))
+      .send({ idempotency_key: `stage-c-purchase:${stageCOrderId}` });
+    expect(generated.status, JSON.stringify(generated.body)).toBe(200);
+    expect(generated.body.purchase_orders).toHaveLength(1);
+    const purchaseOrderId = generated.body.purchase_orders[0].id;
+    await request(app.getHttpServer())
+      .post(`/api/purchase-orders/${purchaseOrderId}/submit`)
+      .set(bearer(adminToken))
+      .expect(200);
+    const approvedPurchase = await request(app.getHttpServer())
+      .post(`/api/purchase-orders/${purchaseOrderId}/approve`)
+      .set(bearer(viewerToken))
+      .send({ reason: 'Independent procurement approval before packing' });
+    expect(approvedPurchase.status, JSON.stringify(approvedPurchase.body)).toBe(200);
+
+    const fulfillment = await request(app.getHttpServer())
+      .get(`/api/sales-orders/${stageCOrderId}/fulfillment`)
+      .set(bearer(adminToken));
+    expect(fulfillment.status, JSON.stringify(fulfillment.body)).toBe(200);
+    expect(fulfillment.body.packing_list_source).toEqual({
+      document_set_id: stageCDocumentSetId,
+      version: stageCDocumentVersion,
+      source_order_locked: true,
+      packages: [
+        {
+          package_no: 'PKG-1',
+          net_weight_kg: '7.5000',
+          volume_cbm: '0.060000',
+          items: [
+            {
+              sales_order_item_id: stageCOrderItemId,
+              quantity: '3.000',
+              weight_kg: '2.5000',
+              volume_cbm: '0.020000',
+            },
+          ],
+        },
+      ],
+    });
+    expect(fulfillment.body.items[0].available_quantity).toBe('3.000');
+
+    const packingDocument = await request(app.getHttpServer())
+      .get(`/api/document-sets/${stageCDocumentSetId}`)
+      .set(bearer(adminToken));
+    expect(packingDocument.status).toBe(200);
+    const realPackingPdf = await new PuppeteerDocumentPdfRenderer().render(
+      packingDocument.body as PublicDocumentSnapshot,
+      'pl',
+      { thumbnails: {} },
+    );
+    expect(realPackingPdf.subarray(0, 5).equals(Buffer.from('%PDF-'))).toBe(true);
+    expect(realPackingPdf.length).toBeGreaterThan(1000);
+
+    const shipmentInput = {
+      idempotency_key: `stage-c-shipment:${stageCOrderId}:one`,
+      batch_number: 'SHIP-STAGE-C-1',
+      carrier: 'DHL',
+      tracking_number: 'DHL-STAGE-C-1',
+      packing_list_document_set_id: stageCDocumentSetId,
+      packing_list_version: stageCDocumentVersion,
+      boxes: [
+        {
+          package_no: 'PKG-1',
+          gross_weight_kg: '3.0000',
+          net_weight_kg: '2.5000',
+          volume_cbm: '0.020000',
+          items: [{ sales_order_item_id: stageCOrderItemId, quantity: '1.000' }],
+        },
+      ],
+    };
+    const invalidWeight = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/shipments`)
+      .set(bearer(adminToken))
+      .send({
+        ...shipmentInput,
+        idempotency_key: `stage-c-shipment:${stageCOrderId}:invalid-weight`,
+        boxes: [{ ...shipmentInput.boxes[0], net_weight_kg: '2.4000' }],
+      });
+    expect(invalidWeight.status).toBe(400);
+    expect(invalidWeight.body.code).toBe('PACKAGE_NET_WEIGHT_MISMATCH');
+
+    const unknownPackage = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/shipments`)
+      .set(bearer(adminToken))
+      .send({
+        ...shipmentInput,
+        idempotency_key: `stage-c-shipment:${stageCOrderId}:unknown-package`,
+        boxes: [{ ...shipmentInput.boxes[0], package_no: 'NOT-IN-PL' }],
+      });
+    expect(unknownPackage.status).toBe(400);
+    expect(unknownPackage.body.code).toBe('PACKAGE_NOT_IN_PACKING_LIST');
+
+    const shipmentResponses = await Promise.all(
+      [1, 2].map(() =>
+        request(app.getHttpServer())
+          .post(`/api/sales-orders/${stageCOrderId}/shipments`)
+          .set(bearer(adminToken))
+          .send(shipmentInput),
+      ),
+    );
+    expect(shipmentResponses.map((response) => response.status)).toEqual([201, 201]);
+    expect(shipmentResponses.map((response) => response.body.idempotent).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(shipmentResponses[1].body.id).toBe(shipmentResponses[0].body.id);
+    const created = shipmentResponses.find((response) => !response.body.idempotent)!;
+    expect(created.body).toMatchObject({
+      status: 'draft',
+      packing_list_document_set_id: stageCDocumentSetId,
+      packing_list_version: stageCDocumentVersion,
+      idempotent: false,
+    });
+    expect(created.body.boxes).toEqual([
+      expect.objectContaining({
+        package_no: 'PKG-1',
+        gross_weight_kg: '3.0000',
+        net_weight_kg: '2.5000',
+        volume_cbm: '0.020000',
+      }),
+    ]);
+    const mismatchedReplay = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/shipments`)
+      .set(bearer(adminToken))
+      .send({ ...shipmentInput, carrier: 'FedEx' });
+    expect(mismatchedReplay.status).toBe(409);
+    expect(mismatchedReplay.body.code).toBe('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+    const crossTenant = await request(app.getHttpServer())
+      .post(`/api/sales-orders/${stageCOrderId}/shipments`)
+      .set(bearer(tenant2Token))
+      .send({ ...shipmentInput, idempotency_key: 'stage-c-shipment:tenant-two' });
+    expect(crossTenant.status).toBe(404);
+
+    const dispatched = await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/dispatch`)
+      .set(bearer(adminToken));
+    expect(dispatched.status).toBe(200);
+    expect(dispatched.body.status).toBe('dispatched');
+    const transitAt = new Date(Date.now() + 1000).toISOString();
+    const transitInput = {
+      idempotency_key: `stage-c-transit:${created.body.id}`,
+      event_type: 'in_transit',
+      location: 'Yantian Port',
+      description: 'Container gate out',
+      occurred_at: transitAt,
+    };
+    const transitResponses = await Promise.all(
+      [1, 2].map(() =>
+        request(app.getHttpServer())
+          .post(`/api/shipments/${created.body.id}/logistics-events`)
+          .set(bearer(adminToken))
+          .send(transitInput),
+      ),
+    );
+    expect(transitResponses.map((response) => response.status)).toEqual([201, 201]);
+    expect(transitResponses.map((response) => response.body.idempotent).sort()).toEqual([
+      false,
+      true,
+    ]);
+    expect(transitResponses[1].body.id).toBe(transitResponses[0].body.id);
+
+    const proof = await request(app.getHttpServer())
+      .post('/api/files')
+      .set(bearer(adminToken))
+      .field('purpose', 'delivery_proof')
+      .attach('file', Buffer.from('stage-c-signed-proof'), {
+        filename: 'stage-c-proof.pdf',
+        contentType: 'application/pdf',
+      });
+    const exceptionEvidence = await request(app.getHttpServer())
+      .post('/api/files')
+      .set(bearer(adminToken))
+      .field('purpose', 'delivery_exception')
+      .attach('file', Buffer.from('stage-c-exception-photo'), {
+        filename: 'stage-c-exception.jpg',
+        contentType: 'image/jpeg',
+      });
+    expect(proof.status).toBe(201);
+    expect(exceptionEvidence.status).toBe(201);
+    const delivered = await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/deliver`)
+      .set(bearer(adminToken))
+      .send({
+        delivered_at: new Date(Date.now() + 2000).toISOString(),
+        received_by: 'Erika Mustermann',
+        attachment_file_ids: [proof.body.id, exceptionEvidence.body.id],
+        note: 'One carton signed at warehouse',
+        exception_note: 'Outer carton dented; goods accepted after inspection',
+      });
+    expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
+    expect(delivered.body).toMatchObject({
+      status: 'delivered',
+      received_by_name: 'Erika Mustermann',
+      delivery_exception_note: 'Outer carton dented; goods accepted after inspection',
+    });
+    expect(delivered.body.delivery_files).toHaveLength(2);
+
+    const partial = await request(app.getHttpServer())
+      .get(`/api/sales-orders/${stageCOrderId}/fulfillment`)
+      .set(bearer(adminToken));
+    expect(partial.status).toBe(200);
+    expect(partial.body.aggregate_status).toBe('fulfillment');
+    expect(partial.body.items[0]).toMatchObject({
+      quantity: '3.000',
+      shipped_quantity: '1.000',
+      delivered_quantity: '1.000',
+      available_quantity: '2.000',
+    });
+
+    const admin = new pg.Client({ connectionString: process.env.DATABASE_URL });
+    await admin.connect();
+    try {
+      const evidence = await admin.query<{
+        action_count: string;
+        packing_snapshot: Record<string, unknown>;
+        audit_payload: string;
+      }>(
+        `SELECT
+           (SELECT COUNT(*)::text FROM audit_logs
+             WHERE resource_id=$1::text
+               AND action IN ('shipment.created_from_packing_list', 'shipment.dispatched',
+                              'shipment.in_transit', 'shipment.delivered')) AS action_count,
+           shipment.packing_list_snapshot AS packing_snapshot,
+           (SELECT string_agg(COALESCE(after_json::text, ''), '') FROM audit_logs
+             WHERE resource_id=$1::text) AS audit_payload
+          FROM shipments shipment WHERE shipment.id=$1::uuid`,
+        [created.body.id],
+      );
+      expect(evidence.rows[0].action_count).toBe('4');
+      expect(evidence.rows[0].packing_snapshot).toMatchObject({
+        document_set_id: stageCDocumentSetId,
+        document_version: stageCDocumentVersion,
+        source_order_locked: true,
+      });
+      expect(evidence.rows[0].audit_payload).not.toContain('cost_unit_price');
+      expect(evidence.rows[0].audit_payload).not.toContain('10.0000');
+    } finally {
+      await admin.end();
+    }
+    storage.objects.clear();
   });
 
   it('stores audit projections without product or document financials', async () => {

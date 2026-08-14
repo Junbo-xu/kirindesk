@@ -436,6 +436,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:over',
         batch_number: 'SHIP-OVER',
         carrier: 'DHL',
         tracking_number: 'DHL-OVER',
@@ -448,6 +449,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:one',
         batch_number: 'SHIP-1',
         carrier: 'DHL',
         tracking_number: 'DHL-001',
@@ -509,6 +511,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/shipments/${shipmentId}/logistics-events`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:transit-one',
         event_type: 'in_transit',
         location: 'Shenzhen',
         description: 'Export scan',
@@ -528,7 +531,8 @@ describe('Stage 2D fulfillment (integration)', () => {
       .set(bearer(salesToken))
       .send({
         delivered_at: new Date(Date.now() + 2000).toISOString(),
-        proof_file_id: DELIVERY_FILE_ID,
+        received_by: 'Buyer Contact One',
+        attachment_file_ids: [DELIVERY_FILE_ID],
         note: 'Customer signed batch one',
       });
     expect(delivered.status, JSON.stringify(delivered.body)).toBe(200);
@@ -538,6 +542,7 @@ describe('Stage 2D fulfillment (integration)', () => {
       .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
       .set(bearer(salesToken))
       .send({
+        idempotency_key: 'shipment:stage2d:two',
         batch_number: 'SHIP-2',
         carrier: 'FedEx',
         tracking_number: 'FEDEX-002',
@@ -565,11 +570,21 @@ describe('Stage 2D fulfillment (integration)', () => {
       .set(bearer(salesToken))
       .expect(200);
     await request(app.getHttpServer())
+      .post(`/api/shipments/${finalShipment.body.id}/logistics-events`)
+      .set(bearer(salesToken))
+      .send({
+        idempotency_key: 'shipment:stage2d:transit-two',
+        event_type: 'in_transit',
+        occurred_at: new Date(Date.now() + 2500).toISOString(),
+      })
+      .expect(201);
+    await request(app.getHttpServer())
       .post(`/api/shipments/${finalShipment.body.id}/deliver`)
       .set(bearer(salesToken))
       .send({
         delivered_at: new Date(Date.now() + 3000).toISOString(),
-        proof_file_id: DELIVERY_FILE_ID,
+        received_by: 'Buyer Contact Final',
+        attachment_file_ids: [DELIVERY_FILE_ID],
         note: 'Customer signed final batch',
       })
       .expect(200);

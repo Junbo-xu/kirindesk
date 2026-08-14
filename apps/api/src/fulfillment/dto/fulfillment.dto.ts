@@ -5,11 +5,13 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsInt,
   IsISO8601,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  Min,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
@@ -18,6 +20,9 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
 const QUANTITY = /^(?!0+(?:\.0+)?$)\d{1,15}(?:\.\d{1,3})?$/;
 const MONEY = /^(?!0+(?:\.0+)?$)\d{1,14}(?:\.\d{1,4})?$/;
 const FX_RATE = /^(?!0+(?:\.0+)?$)\d{1,11}(?:\.\d{1,8})?$/;
+const WEIGHT = /^(?!0+(?:\.0+)?$)\d{1,14}(?:\.\d{1,4})?$/;
+const VOLUME = /^(?!0+(?:\.0+)?$)\d{1,12}(?:\.\d{1,6})?$/;
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 
 export class UpdateFulfillmentSettingsDto {
   @IsBoolean()
@@ -110,7 +115,38 @@ export class CreateShipmentItemDto {
   quantity!: string;
 }
 
+export class CreateShipmentBoxDto {
+  @Transform(trim)
+  @IsString()
+  @MaxLength(100)
+  package_no!: string;
+
+  @IsString()
+  @Matches(WEIGHT)
+  gross_weight_kg!: string;
+
+  @IsString()
+  @Matches(WEIGHT)
+  net_weight_kg!: string;
+
+  @IsString()
+  @Matches(VOLUME)
+  volume_cbm!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => CreateShipmentItemDto)
+  items!: CreateShipmentItemDto[];
+}
+
 export class CreateShipmentDto {
+  @Transform(trim)
+  @IsString()
+  @Matches(IDEMPOTENCY_KEY)
+  idempotency_key!: string;
+
   @Transform(trim)
   @IsString()
   @MaxLength(64)
@@ -126,15 +162,39 @@ export class CreateShipmentDto {
   @MaxLength(160)
   tracking_number!: string;
 
+  @IsOptional()
+  @IsUUID()
+  packing_list_document_set_id?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  packing_list_version?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => CreateShipmentBoxDto)
+  boxes?: CreateShipmentBoxDto[];
+
+  @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(200)
   @ValidateNested({ each: true })
   @Type(() => CreateShipmentItemDto)
-  items!: CreateShipmentItemDto[];
+  items?: CreateShipmentItemDto[];
 }
 
 export class AddLogisticsEventDto {
+  @Transform(trim)
+  @IsString()
+  @Matches(IDEMPOTENCY_KEY)
+  idempotency_key!: string;
+
   @IsIn(['in_transit', 'customs', 'exception'])
   event_type!: 'in_transit' | 'customs' | 'exception';
 
@@ -158,14 +218,28 @@ export class DeliverShipmentDto {
   @IsISO8601({ strict: true })
   delivered_at!: string;
 
-  @IsUUID()
-  proof_file_id!: string;
+  @Transform(trim)
+  @IsString()
+  @MaxLength(200)
+  received_by!: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(20)
+  @IsUUID('4', { each: true })
+  attachment_file_ids!: string[];
 
   @Transform(trim)
   @IsOptional()
   @IsString()
   @MaxLength(1000)
   note?: string;
+
+  @Transform(trim)
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  exception_note?: string;
 }
 
 export class RecordOrderExpenseDto {

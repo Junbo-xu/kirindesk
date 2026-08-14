@@ -1,4 +1,4 @@
-import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
@@ -18,6 +18,10 @@ const UNIT_PRICE = /^\d{1,14}(\.\d{1,4})?$/;
  * server in array order, so it is not part of the input either.
  */
 export class OrderItemInputDto {
+  @IsOptional()
+  @IsUUID()
+  product_id?: string;
+
   @Transform(trim)
   @IsString()
   @MinLength(1)
@@ -60,6 +64,9 @@ export interface OrderItemRow {
   id: string;
   tenant_id: string;
   order_id: string;
+  product_id: string | null;
+  source_document_line_id: string | null;
+  source_line_snapshot: Record<string, unknown> | null;
   line_no: number;
   description: string;
   product_code: string | null;
@@ -77,6 +84,8 @@ export interface OrderItemRow {
 // tenant_id / order_id / deleted_at.
 export interface OrderItemResponse {
   id: string;
+  product_id: string | null;
+  source_document_line_id: string | null;
   line_no: number;
   description: string;
   product_code: string | null;
@@ -90,6 +99,8 @@ export interface OrderItemResponse {
 export function toOrderItemResponse(row: OrderItemRow): OrderItemResponse {
   return {
     id: row.id,
+    product_id: row.product_id,
+    source_document_line_id: row.source_document_line_id,
     line_no: row.line_no,
     description: row.description,
     product_code: row.product_code,

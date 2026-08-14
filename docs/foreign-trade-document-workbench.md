@@ -74,15 +74,20 @@ Phase 1 交付一条真实持久化的外贸单证纵向闭环：产品库 → �
 - Phase 1 汇率由用户输入并锁定，不声称已接入实时汇率供应商。
 - Web 构建主包约 517 kB，已通过构建但存在拆包优化空间，不影响本期正确性。
 
-## 履约接入 Stage A：报价转销售订单
+## KIR-33 B 阶段扩展：订单单证与采购
 
-Stage A 在一期单证工作台上增加报价与销售订单的双向来源关系，不依赖客户追踪链接的确认事件：
+销售订单现可锁定履约快照，并通过 `/api/sales-orders/:id/document-set` 幂等生成或刷新 PI、SC、CI、PL。刷新只递增单证源版本；`trade_document_exports` 和 Files 中的既有 PDF 继续引用原始 `source_version`，不会被覆盖。
 
-- `POST /api/document-sets/:id/sales-order` 接收 `order_number` 与 UUID `idempotency_key`，要求同时具备 `document_sets:manage` 和 `orders:create`，并按两项权限的数据范围收紧。
-- 报价必须已关联有效客户；报价本身可以仍是草稿，也不要求客户打开、下载或确认任何导出。
-- 首次转换创建草稿销售订单和行项目，固定保存报价 ID、报价号、源版本与完整内部快照。后续报价版本不会改写订单的来源快照。
-- 同一报价只允许生成一个销售订单。原请求重复、网络重试或使用新请求键再次转换，均返回同一订单；同一请求键用于其他报价时返回冲突。
-- 报价详情通过 `sales_order_id` 回链订单；销售订单列表和详情通过 `source_quote_id`、`source_quote_number`、`source_quote_version` 回链原报价。
-- 完整来源快照只存储于数据库，不进入销售订单 API、Web 响应或审计详情；成本字段继续受 `document_financials:view` 保护。
+产品财务投影新增默认供应商、采购币种和采购单价。履约已锁定订单可通过 `/api/sales-orders/:id/purchase-orders/generate` 按供应商与币种拆分采购单；任何行缺少产品或采购映射时整笔事务不写入，并返回逐行缺失清单。生成采购单继续使用现有采购审批状态机。
 
-迁移文件为 `054_kir_33_stage_a_quote_order_link.sql`。回滚会移除销售订单上的来源字段和约束，但不修改 053 已发布结构；执行前仍需按正常变更流程备份。
+扩展迁移为 `055_order_documents_and_procurement.sql`。详细验收、测试、风险与回滚证据见 `docs/evidence/kir-33-stage-b-20260809.md`。
+
+## KIR-33 D 阶段扩展：报关资料与版本归档
+
+报关工作台从已审批且已锁定的销售订单，以及同一锁定单证版本的最新 CI/PL 历史导出，创建报关资料草稿。服务端逐行核对产品、数量、单位、单价、金额、币种、包装和净重；缺少 HS 编码、申报要素、包装或重量，或订单/CI/PL 存在冲突时，以结构化 `missing/conflicts` 清单阻断生成。
+
+草稿保存口岸、贸易方式、包装、毛净重、委托方、报关行、统一社会信用代码、联系人和授权事项。生成操作使用 Chromium 输出报关单预录单样单和报关委托书两份真实 PDF，写入 Files，并创建不可修改的 `customs_declaration_versions`。刷新只替换当前草稿来源并递增草稿修订，所有已生成版本和文件保持原样。
+
+创建、刷新、生成和版本导出均使用持久化幂等键；重复 key/同请求回放原结果，重复 key/异请求返回 `IDEMPOTENCY_KEY_REUSED`。API 响应和 Audit 只暴露报关所需销售金额，不返回订单锁定快照中的产品成本或单证内部利润字段。
+
+扩展迁移为 `057_customs_declarations.sql`。详细验收、测试、风险与回滚证据见 `docs/evidence/kir-45-stage-d-20260811.md`。

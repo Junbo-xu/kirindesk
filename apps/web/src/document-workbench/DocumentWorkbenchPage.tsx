@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { apiClient } from '../lib/api-client';
@@ -36,6 +36,11 @@ const LANGUAGES: Array<{ value: TradeDocumentLanguage; label: string }> = [
 
 function emptyLine(): TradeDocumentLineInput {
   return { sku: '', name: '', quantity: '1', unit: 'pcs', unit_price: '0' };
+}
+
+function defaultOrderNumber(quoteNumber: string): string {
+  const suffix = quoteNumber.startsWith('QT-') ? quoteNumber.slice(3) : quoteNumber;
+  return `SO-${suffix}`.slice(0, 64);
 }
 
 function emptyDocument(): TradeDocumentInput {
@@ -131,21 +136,15 @@ function cleanDocument(input: TradeDocumentInput): TradeDocumentInput {
   };
 }
 
-function suggestedOrderNumber(quoteNumber: string): string {
-  const suffix = quoteNumber.replace(/^QT[-_]?/i, '') || quoteNumber;
-  return `SO-${suffix}`.slice(0, 64);
-}
-
 export function DocumentWorkbenchPage() {
   const { hasPermission } = useAuth();
   const [searchParams] = useSearchParams();
-  const requestedDocumentId = useRef(searchParams.get('document'));
   const canManage = hasPermission('document_sets:manage');
-  const canCreateOrder = canManage && hasPermission('orders:create');
   const canLock = hasPermission('document_sets:lock');
   const canExport = hasPermission('document_sets:export');
   const canShare = hasPermission('document_links:manage');
   const canSeeFinancials = hasPermission('document_financials:view');
+  const canCreateOrder = hasPermission('orders:create');
   const [documents, setDocuments] = useState<TradeDocumentSet[]>([]);
   const [customers, setCustomers] = useState<CustomerResponse[]>([]);
   const [products, setProducts] = useState<ProductRecord[]>([]);
@@ -157,9 +156,9 @@ export function DocumentWorkbenchPage() {
   const [draft, setDraft] = useState<TradeDocumentInput>(emptyDocument());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [orderNumber, setOrderNumber] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [conversionOrderNumber, setConversionOrderNumber] = useState('');
 
   const selectedId = selected?.document_set_id ?? null;
   const locked = selected?.status === 'locked';
@@ -185,17 +184,22 @@ export function DocumentWorkbenchPage() {
       setCustomFields(fieldResult.custom.filter((field) => field.active));
       setCustomers(customerResult.data);
       setOrders(orderResult.data);
-      const targetId = selectedId ?? requestedDocumentId.current;
-      requestedDocumentId.current = null;
-      if (targetId) {
+      if (selectedId) {
         const refreshed = documentResult.data.find(
-          (document) => document.document_set_id === targetId,
+          (document) => document.document_set_id === selectedId,
         );
         if (refreshed) {
           setSelected(refreshed);
           setDraft(inputFromDocument(refreshed));
-          setOrderNumber(suggestedOrderNumber(refreshed.quote_number));
-          await loadArtifacts(refreshed.document_set_id);
+        }
+      } else {
+        const requestedDocumentId = searchParams.get('document');
+        if (requestedDocumentId) {
+          const detail = await apiClient.getDocumentSet(requestedDocumentId);
+          setSelected(detail);
+          setDraft(inputFromDocument(detail));
+          setConversionOrderNumber(defaultOrderNumber(detail.quote_number));
+          await loadArtifacts(detail.document_set_id);
         }
       }
     } catch (caught) {
@@ -224,7 +228,7 @@ export function DocumentWorkbenchPage() {
       const detail = await apiClient.getDocumentSet(document.document_set_id);
       setSelected(detail);
       setDraft(inputFromDocument(detail));
-      setOrderNumber(suggestedOrderNumber(detail.quote_number));
+      setConversionOrderNumber(defaultOrderNumber(detail.quote_number));
       await loadArtifacts(detail.document_set_id);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : '加载单证失败');
@@ -236,9 +240,9 @@ export function DocumentWorkbenchPage() {
     setDraft(emptyDocument());
     setExports([]);
     setLinks([]);
-    setOrderNumber('');
     setError(null);
     setNotice(null);
+    setConversionOrderNumber('');
   }
 
   function updateLine(index: number, patch: Partial<TradeDocumentLineInput>) {
@@ -291,6 +295,7 @@ export function DocumentWorkbenchPage() {
         : await apiClient.createDocumentSet(payload);
       setSelected(saved);
       setDraft(inputFromDocument(saved));
+      setConversionOrderNumber(defaultOrderNumber(saved.quote_number));
       await loadBase();
       await loadArtifacts(saved.document_set_id);
       setNotice(`已保存 ${saved.quote_number} v${saved.source_version}`);
@@ -319,22 +324,25 @@ export function DocumentWorkbenchPage() {
   }
 
   async function convertToSalesOrder() {
-    if (!selected || !orderNumber.trim()) return;
+    if (!selected || selected.sales_order_id || !conversionOrderNumber.trim()) return;
     setSaving(true);
     setError(null);
     setNotice(null);
     try {
-      const order = await apiClient.convertDocumentSetToSalesOrder(selected.document_set_id, {
-        order_number: orderNumber.trim(),
-        idempotency_key: crypto.randomUUID(),
+      const converted = await apiClient.convertDocumentSetToSalesOrder(selected.document_set_id, {
+        order_number: conversionOrderNumber.trim(),
+        idempotency_key: `quote-to-order:${selected.document_set_id}`,
+        expected_version: selected.source_version,
       });
+      await loadBase();
       const refreshed = await apiClient.getDocumentSet(selected.document_set_id);
       setSelected(refreshed);
       setDraft(inputFromDocument(refreshed));
-      await loadBase();
-      setNotice(`已由报价 v${order.source_quote_version} 创建销售订单 ${order.order_number}`);
+      setNotice(
+        `${converted.idempotent ? '已恢复' : '已创建'}销售订单 ${converted.sales_order.order_number}`,
+      );
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : '报价建单失败');
+      setError(caught instanceof ApiError ? caught.message : '报价转销售订单失败');
     } finally {
       setSaving(false);
     }
@@ -1102,48 +1110,40 @@ export function DocumentWorkbenchPage() {
               marginTop: 18,
             }}
           >
-            <h2 style={{ fontSize: 18, marginTop: 0 }}>报价转销售订单</h2>
+            <h2 style={{ fontSize: 18, marginTop: 0 }}>销售订单关联</h2>
             {selected.sales_order_id ? (
               <p>
                 已关联销售订单：
-                <Link to={`/orders/${selected.sales_order_id}/edit`}>
-                  {orders.find((order) => order.id === selected.sales_order_id)?.order_number ??
-                    selected.sales_order_id}
-                </Link>
+                <Link to={`/orders/${selected.sales_order_id}/edit`}>查看订单</Link>
               </p>
             ) : (
-              <>
-                <p style={{ color: '#64748b' }}>
-                  内部用户可直接建单，无需等待客户确认；系统会固定保存当前报价版本快照。
-                </p>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'end' }}>
-                  <label>
-                    销售订单号
-                    <input
-                      value={orderNumber}
-                      onChange={(event) => setOrderNumber(event.target.value)}
-                      maxLength={64}
-                      style={{ display: 'block', width: 260 }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={
-                      saving || !canCreateOrder || !selected.customer || !orderNumber.trim()
-                    }
-                    onClick={() => void convertToSalesOrder()}
-                  >
-                    幂等创建销售订单
-                  </button>
-                </div>
-                {!selected.customer && (
-                  <p style={{ color: '#b54708' }}>请先为报价关联客户，再创建销售订单。</p>
-                )}
-                {!canCreateOrder && (
-                  <p style={{ color: '#b54708' }}>需要报价维护和销售订单创建权限。</p>
-                )}
-              </>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}>
+                <label>
+                  订单号
+                  <input
+                    value={conversionOrderNumber}
+                    maxLength={64}
+                    onChange={(event) => setConversionOrderNumber(event.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={
+                    !canCreateOrder ||
+                    saving ||
+                    !selected.customer ||
+                    conversionOrderNumber.trim().length === 0
+                  }
+                  onClick={() => void convertToSalesOrder()}
+                >
+                  从当前报价版本创建销售订单
+                </button>
+                {!selected.customer && <span>请先保存客户关联</span>}
+              </div>
             )}
+            <p style={{ color: '#64748b', marginBottom: 0 }}>
+              转单不依赖客户确认；订单会保留当前报价 v{selected.source_version} 的不可变来源快照。
+            </p>
           </section>
         )}
         {selected && (

@@ -5,7 +5,7 @@ import { migrate } from './migrate.js';
 import { rollback } from './rollback.js';
 
 const LEGACY_RELEASE_MIGRATION = '051_kir_21_p0_web_remediation.sql';
-const CURRENT_RELEASE_MIGRATION = '054_kir_33_stage_a_quote_order_link.sql';
+const CURRENT_RELEASE_MIGRATION = '057_customs_declarations.sql';
 const LEGACY_RELEASE_CHECKSUM = '4e697e314712a1796550ef7cf8a6852a75ef1d7296cf489b0ab9f0d5b4fd0992';
 
 interface MigrationRow {

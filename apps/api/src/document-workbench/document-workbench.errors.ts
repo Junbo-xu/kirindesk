@@ -21,3 +21,22 @@ export class InvalidDocumentWorkbenchDataException extends BadRequestException {
     super({ statusCode: 400, code, message });
   }
 }
+
+export interface ProcurementPrerequisiteMissingItem {
+  sales_order_item_id: string;
+  line_no: number;
+  product_id: string | null;
+  product_code: string | null;
+  missing_fields: string[];
+}
+
+export class ProcurementPrerequisitesException extends BadRequestException {
+  constructor(missing: ProcurementPrerequisiteMissingItem[]) {
+    super({
+      statusCode: 400,
+      code: 'PROCUREMENT_MAPPING_INCOMPLETE',
+      message: 'Purchase orders cannot be generated until every line has a complete mapping',
+      missing,
+    });
+  }
+}

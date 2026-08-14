@@ -147,6 +147,7 @@ export function SalesOrdersListPage() {
           <thead>
             <tr>
               <th style={th}>订单号</th>
+              <th style={th}>来源报价</th>
               <th style={th}>客户</th>
               <th style={th}>币种</th>
               <th style={th}>金额</th>
@@ -159,14 +160,14 @@ export function SalesOrdersListPage() {
           <tbody>
             {orders.map((o) => (
               <tr key={o.id}>
+                <td style={td}>{o.order_number}</td>
                 <td style={td}>
-                  {o.order_number}
-                  {o.source_quote_id && (
-                    <div style={{ fontSize: 12 }}>
-                      <Link to={`/document-workbench?document=${o.source_quote_id}`}>
-                        来源报价 {o.source_quote_number} v{o.source_quote_version}
-                      </Link>
-                    </div>
+                  {o.source_document_set_id && o.source_quote_number ? (
+                    <Link to={`/documents?document=${o.source_document_set_id}`}>
+                      {o.source_quote_number} v{o.source_quote_version}
+                    </Link>
+                  ) : (
+                    '-'
                   )}
                 </td>
                 <td style={td}>{customerName(o.customer_id)}</td>

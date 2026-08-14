@@ -105,5 +105,8 @@ INSERT INTO permissions (id, module_id, code, name, action) VALUES
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:lock', '锁定外贸单证', 'lock'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_sets:export', '导出外贸单证', 'export'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'document_links:manage', '管理客户追踪链接', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'customs_declarations:view', '查看报关资料', 'view'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'customs_declarations:manage', '维护报关资料', 'manage'),
+  (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000002', 'customs_declarations:export', '导出报关资料', 'export'),
   (uuid_generate_v4(), 'a0000000-0000-0000-0000-000000000004', 'document_financials:view', '查看单证成本利润', 'view')
 ON CONFLICT (code) DO NOTHING;

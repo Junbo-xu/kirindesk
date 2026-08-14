@@ -13,12 +13,15 @@ import {
 import { computeLineTotal, sumMoney } from '../lib/order-money';
 import { OrderApprovalActions } from '../components/OrderApprovalActions';
 import { useCustomerOptions } from './useCustomerOptions';
+import { useAuth } from '../auth/AuthContext';
+import type { ProductRecord } from '../lib/types';
 
 const CURRENCY_OPTIONS: Currency[] = ['RMB', 'USD', 'HKD', 'EUR'];
 
 // An editable line row in the form. Mirrors OrderItemInput but every field is a
 // string so inputs stay controlled; optional fields are sent only when filled.
 interface ItemRow {
+  product_id: string;
   description: string;
   product_code: string;
   unit: string;
@@ -28,6 +31,7 @@ interface ItemRow {
 }
 
 const EMPTY_ROW: ItemRow = {
+  product_id: '',
   description: '',
   product_code: '',
   unit: '',
@@ -55,6 +59,7 @@ export function SalesOrderFormPage() {
   const { id } = useParams();
   const isEdit = Boolean(id);
   const navigate = useNavigate();
+  const { hasPermission } = useAuth();
   const { options: customers, loading: customersLoading } = useCustomerOptions();
 
   const [customerId, setCustomerId] = useState('');
@@ -62,13 +67,19 @@ export function SalesOrderFormPage() {
   const [piNumber, setPiNumber] = useState('');
   const [currency, setCurrency] = useState<Currency>('RMB');
   const [items, setItems] = useState<ItemRow[]>([]);
+  const [products, setProducts] = useState<ProductRecord[]>([]);
   const [status, setStatus] = useState('');
   const [notes, setNotes] = useState('');
   const [sourceQuote, setSourceQuote] = useState<{
-    id: string;
-    number: string;
+    documentSetId: string;
+    quoteNumber: string;
     version: number;
   } | null>(null);
+  const [updatedAt, setUpdatedAt] = useState('');
+  const [fulfillmentLockedAt, setFulfillmentLockedAt] = useState<string | null>(null);
+  const [workflowBusy, setWorkflowBusy] = useState(false);
+  const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [documentSetId, setDocumentSetId] = useState<string | null>(null);
 
   // Phase 1F-B FX. fxRate is an optional manual override input (blank = let the
   // server resolve). The frozen snapshot fields are read-only, populated from the
@@ -84,6 +95,21 @@ export function SalesOrderFormPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    let active = true;
+    apiClient
+      .listProducts({ active: true, pageSize: 100 })
+      .then((result) => {
+        if (active) setProducts(result.data);
+      })
+      .catch(() => {
+        if (active) setProducts([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!id) return;
     let active = true;
     setLoading(true);
@@ -97,11 +123,13 @@ export function SalesOrderFormPage() {
         setPiNumber(o.pi_number ?? '');
         setCurrency(o.currency);
         setStatus(o.status);
+        setUpdatedAt(o.updated_at);
+        setFulfillmentLockedAt(o.fulfillment_locked_at);
         setSourceQuote(
-          o.source_quote_id && o.source_quote_number && o.source_quote_version
+          o.source_document_set_id && o.source_quote_number && o.source_quote_version
             ? {
-                id: o.source_quote_id,
-                number: o.source_quote_number,
+                documentSetId: o.source_document_set_id,
+                quoteNumber: o.source_quote_number,
                 version: o.source_quote_version,
               }
             : null,
@@ -114,6 +142,7 @@ export function SalesOrderFormPage() {
         // Echo existing line items (ordered by line_no from the API).
         setItems(
           (o.items ?? []).map((it) => ({
+            product_id: it.product_id ?? '',
             description: it.description,
             product_code: it.product_code ?? '',
             unit: it.unit ?? '',
@@ -146,6 +175,10 @@ export function SalesOrderFormPage() {
   // not the editable status select).
   const isApprovalState =
     status === 'pending_approval' || status === 'approved' || status === 'rejected';
+  const fulfillmentLocked = fulfillmentLockedAt !== null;
+  const canLockForFulfillment = hasPermission('orders:update');
+  const canSyncDocuments = hasPermission('document_sets:manage');
+  const canGeneratePurchaseOrders = hasPermission('procurement:create');
 
   function updateRow(index: number, patch: Partial<ItemRow>) {
     setItems((rows) => rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));
@@ -182,6 +215,7 @@ export function SalesOrderFormPage() {
         quantity: r.quantity,
         unit_price: r.unit_price,
       };
+      if (r.product_id) item.product_id = r.product_id;
       if (r.product_code.trim() !== '') item.product_code = r.product_code.trim();
       if (r.unit.trim() !== '') item.unit = r.unit.trim();
       if (r.notes.trim() !== '') item.notes = r.notes.trim();
@@ -264,6 +298,91 @@ export function SalesOrderFormPage() {
     }
   }
 
+  function chooseProduct(index: number, productId: string) {
+    const selected = products.find((product) => product.id === productId);
+    if (!selected) {
+      updateRow(index, { product_id: '' });
+      return;
+    }
+    updateRow(index, {
+      product_id: selected.id,
+      description: selected.name,
+      product_code: selected.sku,
+      unit: selected.unit,
+      unit_price: selected.default_unit_price,
+    });
+  }
+
+  async function lockForFulfillment() {
+    if (!id || !updatedAt) return;
+    setWorkflowBusy(true);
+    setError(null);
+    setWorkflowNotice(null);
+    try {
+      const result = await apiClient.lockSalesOrderForFulfillment(id, updatedAt);
+      setUpdatedAt(result.sales_order.updated_at);
+      setFulfillmentLockedAt(result.sales_order.fulfillment_locked_at);
+      setWorkflowNotice(result.idempotent ? '订单已处于履约锁定状态。' : '订单履约快照已锁定。');
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : '锁定订单失败');
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
+  async function syncDocuments() {
+    if (!id || !updatedAt) return;
+    setWorkflowBusy(true);
+    setError(null);
+    setWorkflowNotice(null);
+    try {
+      const result = await apiClient.syncSalesOrderDocuments(id, {
+        idempotency_key: `order-documents:${id}:${updatedAt}`,
+        expected_updated_at: updatedAt,
+      });
+      setDocumentSetId(result.document.document_set_id);
+      setWorkflowNotice(
+        result.refreshed
+          ? `PI / SC / CI / PL 已刷新；保留 ${result.preserved_export_count} 份历史导出。`
+          : 'PI / SC / CI / PL 已从当前订单版本生成。',
+      );
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : '生成订单单证失败');
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
+  async function generatePurchaseOrders() {
+    if (!id) return;
+    setWorkflowBusy(true);
+    setError(null);
+    setWorkflowNotice(null);
+    try {
+      const result = await apiClient.generateSalesOrderPurchaseOrders(
+        id,
+        `order-purchase-orders:${id}`,
+      );
+      setWorkflowNotice(`已按供应商拆分生成 ${result.purchase_orders.length} 张采购单。`);
+    } catch (caught) {
+      if (caught instanceof ApiError && Array.isArray(caught.details?.missing)) {
+        const missing = caught.details.missing as Array<{
+          line_no: number;
+          missing_fields: string[];
+        }>;
+        setError(
+          `采购映射不完整：${missing
+            .map((item) => `第 ${item.line_no} 行缺少 ${item.missing_fields.join('/')}`)
+            .join('；')}`,
+        );
+      } else {
+        setError(caught instanceof ApiError ? caught.message : '生成采购单失败');
+      }
+    } finally {
+      setWorkflowBusy(false);
+    }
+  }
+
   const labelStyle: CSSProperties = { display: 'block', marginTop: 12 };
 
   if (loading) {
@@ -275,10 +394,15 @@ export function SalesOrderFormPage() {
       <h1 style={{ fontSize: 20 }}>{isEdit ? '编辑订单' : '新建订单'}</h1>
       {sourceQuote && (
         <p>
-          来源：
-          <Link to={`/document-workbench?document=${sourceQuote.id}`}>
-            报价 {sourceQuote.number} v{sourceQuote.version}
+          来源报价：
+          <Link to={`/documents?document=${sourceQuote.documentSetId}`}>
+            {sourceQuote.quoteNumber} v{sourceQuote.version}
           </Link>
+        </p>
+      )}
+      {fulfillmentLockedAt && (
+        <p style={{ color: '#166534', background: '#f0fdf4', padding: 10 }}>
+          履约快照已锁定：{new Date(fulfillmentLockedAt).toLocaleString()}。订单事实不可再编辑。
         </p>
       )}
       <form onSubmit={onSubmit}>
@@ -347,7 +471,7 @@ export function SalesOrderFormPage() {
         <div style={{ marginTop: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <strong>行项</strong>
-            <button type="button" onClick={addRow}>
+            <button type="button" onClick={addRow} disabled={fulfillmentLocked}>
               + 添加行项
             </button>
           </div>
@@ -367,14 +491,31 @@ export function SalesOrderFormPage() {
                   padding: 10,
                   marginTop: 8,
                   display: 'grid',
-                  gridTemplateColumns: '1fr 90px 110px 110px auto',
+                  gridTemplateColumns: '180px 1fr 90px 110px 110px auto',
                   gap: 8,
                   alignItems: 'end',
                 }}
               >
                 <label style={{ fontSize: 13 }}>
+                  产品
+                  <select
+                    value={row.product_id}
+                    disabled={fulfillmentLocked}
+                    onChange={(event) => chooseProduct(i, event.target.value)}
+                    style={{ width: '100%' }}
+                  >
+                    <option value="">未关联产品</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.sku} · {product.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ fontSize: 13 }}>
                   描述
                   <input
+                    disabled={fulfillmentLocked}
                     value={row.description}
                     onChange={(e) => updateRow(i, { description: e.target.value })}
                     maxLength={500}
@@ -384,6 +525,7 @@ export function SalesOrderFormPage() {
                 <label style={{ fontSize: 13 }}>
                   数量
                   <input
+                    disabled={fulfillmentLocked}
                     value={row.quantity}
                     onChange={(e) => updateRow(i, { quantity: e.target.value })}
                     placeholder="如 2"
@@ -393,6 +535,7 @@ export function SalesOrderFormPage() {
                 <label style={{ fontSize: 13 }}>
                   单价
                   <input
+                    disabled={fulfillmentLocked}
                     value={row.unit_price}
                     onChange={(e) => updateRow(i, { unit_price: e.target.value })}
                     placeholder="如 100.00"
@@ -408,7 +551,12 @@ export function SalesOrderFormPage() {
                     style={{ width: '100%', background: '#f5f5f5' }}
                   />
                 </label>
-                <button type="button" onClick={() => removeRow(i)} title="删除该行">
+                <button
+                  type="button"
+                  disabled={fulfillmentLocked}
+                  onClick={() => removeRow(i)}
+                  title="删除该行"
+                >
                   删除
                 </button>
               </div>
@@ -493,7 +641,7 @@ export function SalesOrderFormPage() {
         </label>
         {error && <p style={{ color: 'crimson', marginTop: 12 }}>{error}</p>}
         <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-          <button type="submit" disabled={submitting}>
+          <button type="submit" disabled={submitting || fulfillmentLocked}>
             {submitting ? '提交中…' : isEdit ? '保存' : '创建'}
           </button>
           <button type="button" onClick={() => navigate('/orders')}>
@@ -502,13 +650,68 @@ export function SalesOrderFormPage() {
         </div>
       </form>
       {isEdit && id && (
+        <section
+          style={{ border: '1px solid #cbd5e1', borderRadius: 6, padding: 12, marginTop: 20 }}
+        >
+          <strong>履约生成</strong>
+          <p style={{ color: '#64748b', fontSize: 13 }}>
+            单证可在锁定前按订单版本刷新；采购单只从履约锁定快照生成，并继续走既有采购审批。
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {canLockForFulfillment && (
+              <button
+                type="button"
+                disabled={workflowBusy || fulfillmentLocked}
+                onClick={() => void lockForFulfillment()}
+              >
+                锁定履约快照
+              </button>
+            )}
+            {canSyncDocuments && (
+              <button type="button" disabled={workflowBusy} onClick={() => void syncDocuments()}>
+                生成 / 刷新 PI、SC、CI、PL
+              </button>
+            )}
+            {canGeneratePurchaseOrders && (
+              <button
+                type="button"
+                disabled={workflowBusy || !fulfillmentLocked}
+                onClick={() => void generatePurchaseOrders()}
+              >
+                按供应商生成采购单
+              </button>
+            )}
+            {documentSetId && (
+              <Link to={`/documents?document=${documentSetId}`}>打开单证工作台</Link>
+            )}
+          </div>
+          {workflowNotice && <p style={{ color: '#166534' }}>{workflowNotice}</p>}
+        </section>
+      )}
+      {isEdit && id && (
         <OrderApprovalActions
           status={status as OrderStatus}
           handlers={{
-            submit: () => apiClient.submitSalesOrder(id),
-            approve: (reason) => apiClient.approveSalesOrder(id, reason),
-            reject: (reason) => apiClient.rejectSalesOrder(id, reason),
-            withdraw: (reason) => apiClient.withdrawSalesOrder(id, reason),
+            submit: () =>
+              apiClient.submitSalesOrder(id).then((next) => {
+                setUpdatedAt(next.updated_at);
+                return next;
+              }),
+            approve: (reason) =>
+              apiClient.approveSalesOrder(id, reason).then((next) => {
+                setUpdatedAt(next.updated_at);
+                return next;
+              }),
+            reject: (reason) =>
+              apiClient.rejectSalesOrder(id, reason).then((next) => {
+                setUpdatedAt(next.updated_at);
+                return next;
+              }),
+            withdraw: (reason) =>
+              apiClient.withdrawSalesOrder(id, reason).then((next) => {
+                setUpdatedAt(next.updated_at);
+                return next;
+              }),
           }}
           onTransitioned={(next) => setStatus(next)}
         />

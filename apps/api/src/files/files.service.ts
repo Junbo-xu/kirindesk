@@ -46,6 +46,10 @@ export interface DownloadTarget {
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 20;
 const FK_VIOLATION = '23503';
+const DOMAIN_PROTECTED_SQL =
+  "(purpose IS NULL OR purpose NOT IN ('customs-pre-entry', 'customs-authorization'))";
+
+export type DomainProtectedFilePurpose = 'customs-pre-entry' | 'customs-authorization';
 
 @Injectable()
 export class FilesService {
@@ -136,12 +140,14 @@ export class FilesService {
     const pageSize = query.pageSize ?? DEFAULT_PAGE_SIZE;
     const offset = (page - 1) * pageSize;
 
-    const conditions: string[] = ['deleted_at IS NULL'];
+    const conditions: string[] = ['deleted_at IS NULL', DOMAIN_PROTECTED_SQL];
     const params: unknown[] = [];
 
     if (this.restrictsToOwner(actor.dataScope)) {
       params.push(actor.userId);
       conditions.push(`uploaded_by = $${params.length}`);
+    } else if (actor.dataScope !== 'all') {
+      conditions.push('false');
     }
     if (query.purpose) {
       params.push(query.purpose);
@@ -186,9 +192,12 @@ export class FilesService {
     if (this.restrictsToOwner(actor.dataScope)) {
       params.push(actor.userId);
       scopeClause = ' AND uploaded_by = $2';
+    } else if (actor.dataScope !== 'all') {
+      scopeClause = ' AND false';
     }
     const { rows } = await client.query<FileRow>(
-      `SELECT * FROM files WHERE id = $1 AND deleted_at IS NULL${scopeClause}${forUpdate ? ' FOR UPDATE' : ''}`,
+      `SELECT * FROM files
+        WHERE id = $1 AND deleted_at IS NULL AND ${DOMAIN_PROTECTED_SQL}${scopeClause}${forUpdate ? ' FOR UPDATE' : ''}`,
       params,
     );
     if (rows.length === 0) {
@@ -214,7 +223,8 @@ export class FilesService {
     }
     const { rows } = await client.query<FileRow>(
       `SELECT * FROM files
-        WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL${scopeClause}`,
+        WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+          AND ${DOMAIN_PROTECTED_SQL}${scopeClause}`,
       params,
     );
     return rows;
@@ -238,6 +248,22 @@ export class FilesService {
     actor: RequestActor,
     id: string,
   ): Promise<{ token: string; expiresAt: Date }> {
+    return this.createDownloadTokenInScope(actor, id);
+  }
+
+  async createDomainDownloadToken(
+    actor: RequestActor,
+    id: string,
+    purpose: DomainProtectedFilePurpose,
+  ): Promise<{ token: string; expiresAt: Date }> {
+    return this.createDownloadTokenInScope(actor, id, purpose);
+  }
+
+  private async createDownloadTokenInScope(
+    actor: RequestActor,
+    id: string,
+    protectedPurpose?: DomainProtectedFilePurpose,
+  ): Promise<{ token: string; expiresAt: Date }> {
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = createHash('sha256').update(rawToken).digest('hex');
     const expiresAt = new Date(Date.now() + DOWNLOAD_TOKEN_TTL_MS);
@@ -246,8 +272,18 @@ export class FilesService {
       this.pool,
       { tenantId: actor.tenantId, userId: actor.userId, actorType: 'tenant_user' },
       async (client) => {
-        // Confirms visibility/scope before minting a token.
-        const file = await this.fetchInScope(client, actor, id);
+        let file: FileRow;
+        if (protectedPurpose) {
+          const result = await client.query<FileRow>(
+            `SELECT * FROM files
+              WHERE id=$1 AND deleted_at IS NULL AND purpose=$2`,
+            [id, protectedPurpose],
+          );
+          if (result.rows.length === 0) throw new FileNotFoundException();
+          file = result.rows[0];
+        } else {
+          file = await this.fetchInScope(client, actor, id);
+        }
         await client.query(
           `INSERT INTO file_access_tokens
              (tenant_id, file_id, token_hash, purpose, created_by, expires_at)
