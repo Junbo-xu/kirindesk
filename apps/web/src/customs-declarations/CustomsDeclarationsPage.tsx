@@ -107,11 +107,13 @@ export function CustomsDeclarationsPage() {
   }
 
   useEffect(() => {
+    let cancelled = false;
     void Promise.all([
       apiClient.listCustomsDeclarations(),
       canBrowseOrders ? apiClient.listSalesOrders({ pageSize: 100 }) : Promise.resolve(null),
     ])
       .then(async ([existing, salesOrders]) => {
+        if (cancelled) return;
         const options = new Map<string, OrderOption>();
         for (const item of existing.data) {
           options.set(item.sales_order_id, {
@@ -132,7 +134,13 @@ export function CustomsDeclarationsPage() {
         setOrderId(first);
         await loadDeclaration(first);
       })
-      .catch((caught) => setError(message(caught)));
+      .catch((caught) => {
+        if (!cancelled) setError(message(caught));
+      });
+    return () => {
+      cancelled = true;
+      loadSequence.current += 1;
+    };
   }, [canBrowseOrders]);
 
   function field(key: keyof Details, value: string) {
