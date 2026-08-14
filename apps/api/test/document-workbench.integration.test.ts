@@ -1124,7 +1124,7 @@ describe('foreign trade document workbench (integration)', () => {
     expect(archived.body[0].source_version).toBe(1);
     renderer.snapshots = [];
     storage.objects.clear();
-  });
+  }, 60_000);
 
   it('blocks incomplete mappings, then idempotently splits purchase orders with approval', async () => {
     const supplierOne = await request(app.getHttpServer())

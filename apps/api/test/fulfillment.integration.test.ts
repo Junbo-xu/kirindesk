@@ -398,69 +398,89 @@ describe('Stage 2D fulfillment (integration)', () => {
     expect(evidence).toEqual({ exception_type: 'quality_variance', status: 'open' });
   });
 
-  it('fails closed for none-scoped fulfillment permissions without mutating data', async () => {
-    const before = await withAdmin(async (client) => {
-      const result = await client.query<{ receipts: number; shipments: number; expenses: number }>(
-        `SELECT
+  it.each(['none', 'unknown'])(
+    'fails closed for %s-scoped fulfillment permissions without mutating data',
+    async (dataScope) => {
+      await withAdmin(async (client) => {
+        await client.query(
+          `UPDATE role_permissions
+              SET data_scope = $1
+            WHERE tenant_id = $2 AND role_id = $3`,
+          [dataScope, TEST_TENANT_ID, NONE_SCOPE_ROLE_ID],
+        );
+      });
+
+      const before = await withAdmin(async (client) => {
+        const result = await client.query<{
+          receipts: number;
+          shipments: number;
+          expenses: number;
+        }>(
+          `SELECT
            (SELECT count(*)::integer FROM goods_receipts WHERE sales_order_id=$1) AS receipts,
            (SELECT count(*)::integer FROM shipments WHERE sales_order_id=$1) AS shipments,
            (SELECT count(*)::integer FROM order_expenses WHERE sales_order_id=$1) AS expenses`,
-        [SALES_ORDER_ID],
-      );
-      return result.rows[0];
-    });
+          [SALES_ORDER_ID],
+        );
+        return result.rows[0];
+      });
 
-    await request(app.getHttpServer())
-      .get(`/api/sales-orders/${SALES_ORDER_ID}/fulfillment`)
-      .set(bearer(noneScopeToken))
-      .expect(404);
+      await request(app.getHttpServer())
+        .get(`/api/sales-orders/${SALES_ORDER_ID}/fulfillment`)
+        .set(bearer(noneScopeToken))
+        .expect(404);
 
-    await request(app.getHttpServer())
-      .post(`/api/purchase-orders/${PURCHASE_ORDER_ID}/goods-receipts`)
-      .set(bearer(noneScopeToken))
-      .send({
-        batch_number: 'GR-NONE-SCOPE',
-        is_final_batch: false,
-        items: [{ purchase_order_item_id: PURCHASE_ITEM_ID, received_quantity: '1' }],
-      })
-      .expect(403);
+      await request(app.getHttpServer())
+        .post(`/api/purchase-orders/${PURCHASE_ORDER_ID}/goods-receipts`)
+        .set(bearer(noneScopeToken))
+        .send({
+          batch_number: 'GR-NONE-SCOPE',
+          is_final_batch: false,
+          items: [{ purchase_order_item_id: PURCHASE_ITEM_ID, received_quantity: '1' }],
+        })
+        .expect(403);
 
-    await request(app.getHttpServer())
-      .post(`/api/goods-receipts/${firstReceiptId}/confirm`)
-      .set(bearer(noneScopeToken))
-      .send({ decision: 'accepted' })
-      .expect(404);
+      await request(app.getHttpServer())
+        .post(`/api/goods-receipts/${firstReceiptId}/confirm`)
+        .set(bearer(noneScopeToken))
+        .send({ decision: 'accepted' })
+        .expect(404);
 
-    await request(app.getHttpServer())
-      .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
-      .set(bearer(noneScopeToken))
-      .send({
-        idempotency_key: 'shipment:none-scope',
-        batch_number: 'SHIP-NONE-SCOPE',
-        carrier: 'DHL',
-        tracking_number: 'DHL-NONE-SCOPE',
-        items: [{ sales_order_item_id: SALES_ITEM_ID, quantity: '1' }],
-      })
-      .expect(404);
+      await request(app.getHttpServer())
+        .post(`/api/sales-orders/${SALES_ORDER_ID}/shipments`)
+        .set(bearer(noneScopeToken))
+        .send({
+          idempotency_key: 'shipment:none-scope',
+          batch_number: 'SHIP-NONE-SCOPE',
+          carrier: 'DHL',
+          tracking_number: 'DHL-NONE-SCOPE',
+          items: [{ sales_order_item_id: SALES_ITEM_ID, quantity: '1' }],
+        })
+        .expect(404);
 
-    await request(app.getHttpServer())
-      .post(`/api/sales-orders/${SALES_ORDER_ID}/expenses`)
-      .set(bearer(noneScopeToken))
-      .send({ expense_type: 'freight', amount: '1', currency: 'RMB' })
-      .expect(404);
+      await request(app.getHttpServer())
+        .post(`/api/sales-orders/${SALES_ORDER_ID}/expenses`)
+        .set(bearer(noneScopeToken))
+        .send({ expense_type: 'freight', amount: '1', currency: 'RMB' })
+        .expect(404);
 
-    const after = await withAdmin(async (client) => {
-      const result = await client.query<{ receipts: number; shipments: number; expenses: number }>(
-        `SELECT
+      const after = await withAdmin(async (client) => {
+        const result = await client.query<{
+          receipts: number;
+          shipments: number;
+          expenses: number;
+        }>(
+          `SELECT
            (SELECT count(*)::integer FROM goods_receipts WHERE sales_order_id=$1) AS receipts,
            (SELECT count(*)::integer FROM shipments WHERE sales_order_id=$1) AS shipments,
            (SELECT count(*)::integer FROM order_expenses WHERE sales_order_id=$1) AS expenses`,
-        [SALES_ORDER_ID],
-      );
-      return result.rows[0];
-    });
-    expect(after).toEqual(before);
-  });
+          [SALES_ORDER_ID],
+        );
+        return result.rows[0];
+      });
+      expect(after).toEqual(before);
+    },
+  );
 
   it('persists final and over-receipt batches with quantity exceptions and auto confirmation', async () => {
     const second = await request(app.getHttpServer())

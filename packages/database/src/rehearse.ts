@@ -30,6 +30,7 @@ interface RoleFixture {
 interface MainStageAFixture {
   tenantId: string;
   userId: string;
+  customerId: string;
   documentSetId: string;
   salesOrderId: string;
   quoteNumber: string;
@@ -62,27 +63,11 @@ async function historicalLedger(
 }
 
 async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
-  const source = await pool.query<{ tenantId: string; userId: string; customerId: string }>(
-    `SELECT tenant.id AS "tenantId", tenant_user.id AS "userId", customer.id AS "customerId"
-       FROM tenants tenant
-       JOIN users tenant_user
-         ON tenant_user.tenant_id = tenant.id
-        AND tenant_user.status = 'active'
-        AND tenant_user.deleted_at IS NULL
-       JOIN customers customer
-         ON customer.tenant_id = tenant.id
-        AND customer.deleted_at IS NULL
-      ORDER BY tenant.created_at, tenant_user.created_at, customer.created_at
-      LIMIT 1`,
-  );
-  if (!source.rows[0]) {
-    throw new Error('Main 054 upgrade rehearsal requires an existing tenant, user and customer.');
-  }
-
   const suffix = randomUUID();
   const fixture: MainStageAFixture = {
-    tenantId: source.rows[0].tenantId,
-    userId: source.rows[0].userId,
+    tenantId: randomUUID(),
+    userId: randomUUID(),
+    customerId: randomUUID(),
     documentSetId: randomUUID(),
     salesOrderId: randomUUID(),
     quoteNumber: `MIG-054-${suffix.slice(0, 8)}`,
@@ -92,6 +77,21 @@ async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
   try {
     await client.query('BEGIN');
     await client.query(
+      `INSERT INTO tenants (id, name, slug)
+       VALUES ($1, 'Main 054 migration rehearsal', $2)`,
+      [fixture.tenantId, `main-054-rehearsal-${suffix}`],
+    );
+    await client.query(
+      `INSERT INTO users (id, tenant_id, email, password_hash, name)
+       VALUES ($1,$2,$3,'migration-rehearsal','Main 054 migration rehearsal')`,
+      [fixture.userId, fixture.tenantId, `main-054-${suffix}@example.invalid`],
+    );
+    await client.query(
+      `INSERT INTO customers (id, tenant_id, owner_user_id, company_name)
+       VALUES ($1,$2,$3,'Main 054 migration rehearsal')`,
+      [fixture.customerId, fixture.tenantId, fixture.userId],
+    );
+    await client.query(
       `INSERT INTO trade_document_sets
          (id, tenant_id, owner_user_id, customer_id, quote_number)
        VALUES ($1,$2,$3,$4,$5)`,
@@ -99,7 +99,7 @@ async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
         fixture.documentSetId,
         fixture.tenantId,
         fixture.userId,
-        source.rows[0].customerId,
+        fixture.customerId,
         fixture.quoteNumber,
       ],
     );
@@ -112,7 +112,7 @@ async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
       [
         fixture.salesOrderId,
         fixture.tenantId,
-        source.rows[0].customerId,
+        fixture.customerId,
         fixture.userId,
         `SO-MIG-054-${suffix.slice(0, 8)}`,
         fixture.documentSetId,
@@ -134,6 +134,9 @@ async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
 async function removeMainStageAFixture(pool: Pool, fixture: MainStageAFixture): Promise<void> {
   await pool.query('DELETE FROM sales_orders WHERE id = $1', [fixture.salesOrderId]);
   await pool.query('DELETE FROM trade_document_sets WHERE id = $1', [fixture.documentSetId]);
+  await pool.query('DELETE FROM customers WHERE id = $1', [fixture.customerId]);
+  await pool.query('DELETE FROM users WHERE id = $1', [fixture.userId]);
+  await pool.query('DELETE FROM tenants WHERE id = $1', [fixture.tenantId]);
 }
 
 async function assertMainStageAUpgrade(pool: Pool, fixture: MainStageAFixture): Promise<void> {
