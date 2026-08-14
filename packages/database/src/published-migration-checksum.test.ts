@@ -15,4 +15,14 @@ describe('published migration checksums', () => {
       '4e697e314712a1796550ef7cf8a6852a75ef1d7296cf489b0ab9f0d5b4fd0992',
     );
   });
+
+  it('keeps the main-applied KIR-33 stage A 054 migration immutable', () => {
+    const migration = readFileSync(
+      join(migrationsDirectory, '054_kir_33_stage_a_quote_order_link.sql'),
+      'utf8',
+    );
+    expect(createHash('sha256').update(migration).digest('hex')).toBe(
+      '7e8690c1c017d14a56839cd51bc20541f21b040a7a8272eb020d43492760f347',
+    );
+  });
 });

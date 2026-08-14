@@ -264,6 +264,8 @@ export class FulfillmentService {
     if (this.restrictsToOwner(actor.dataScope)) {
       params.push(actor.userId);
       scope = ` AND owner_user_id = $${params.length}`;
+    } else if (actor.dataScope !== 'all') {
+      scope = ' AND false';
     }
     const result = await client.query<SalesOrderRow>(
       `SELECT id, owner_user_id, order_number, currency, status, source_pi_id,

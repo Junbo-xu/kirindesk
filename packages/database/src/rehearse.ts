@@ -5,8 +5,10 @@ import { migrate } from './migrate.js';
 import { rollback } from './rollback.js';
 
 const LEGACY_RELEASE_MIGRATION = '051_kir_21_p0_web_remediation.sql';
+const MAIN_STAGE_A_MIGRATION = '054_kir_33_stage_a_quote_order_link.sql';
 const CURRENT_RELEASE_MIGRATION = '057_customs_declarations.sql';
 const LEGACY_RELEASE_CHECKSUM = '4e697e314712a1796550ef7cf8a6852a75ef1d7296cf489b0ab9f0d5b4fd0992';
+const MAIN_STAGE_A_CHECKSUM = '7e8690c1c017d14a56839cd51bc20541f21b040a7a8272eb020d43492760f347';
 
 interface MigrationRow {
   filename: string;
@@ -25,6 +27,15 @@ interface RoleFixture {
   missingGrantRoleId: string;
 }
 
+interface MainStageAFixture {
+  tenantId: string;
+  userId: string;
+  documentSetId: string;
+  salesOrderId: string;
+  quoteNumber: string;
+  idempotencyKey: string;
+}
+
 async function latestMigration(pool: Pool): Promise<string | null> {
   const result = await pool.query<{ filename: string }>(
     'SELECT filename FROM _migrations ORDER BY filename DESC LIMIT 1',
@@ -32,7 +43,10 @@ async function latestMigration(pool: Pool): Promise<string | null> {
   return result.rows[0]?.filename ?? null;
 }
 
-async function historicalLedger(pool: Pool): Promise<MigrationLedgerRow[]> {
+async function historicalLedger(
+  pool: Pool,
+  through = LEGACY_RELEASE_MIGRATION,
+): Promise<MigrationLedgerRow[]> {
   const result = await pool.query<MigrationLedgerRow>(
     `SELECT id,
             filename,
@@ -42,9 +56,158 @@ async function historicalLedger(pool: Pool): Promise<MigrationLedgerRow[]> {
        FROM _migrations
       WHERE filename <= $1
       ORDER BY id`,
-    [LEGACY_RELEASE_MIGRATION],
+    [through],
   );
   return result.rows;
+}
+
+async function createMainStageAFixture(pool: Pool): Promise<MainStageAFixture> {
+  const source = await pool.query<{ tenantId: string; userId: string; customerId: string }>(
+    `SELECT tenant.id AS "tenantId", tenant_user.id AS "userId", customer.id AS "customerId"
+       FROM tenants tenant
+       JOIN users tenant_user
+         ON tenant_user.tenant_id = tenant.id
+        AND tenant_user.status = 'active'
+        AND tenant_user.deleted_at IS NULL
+       JOIN customers customer
+         ON customer.tenant_id = tenant.id
+        AND customer.deleted_at IS NULL
+      ORDER BY tenant.created_at, tenant_user.created_at, customer.created_at
+      LIMIT 1`,
+  );
+  if (!source.rows[0]) {
+    throw new Error('Main 054 upgrade rehearsal requires an existing tenant, user and customer.');
+  }
+
+  const suffix = randomUUID();
+  const fixture: MainStageAFixture = {
+    tenantId: source.rows[0].tenantId,
+    userId: source.rows[0].userId,
+    documentSetId: randomUUID(),
+    salesOrderId: randomUUID(),
+    quoteNumber: `MIG-054-${suffix.slice(0, 8)}`,
+    idempotencyKey: randomUUID(),
+  };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO trade_document_sets
+         (id, tenant_id, owner_user_id, customer_id, quote_number)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [
+        fixture.documentSetId,
+        fixture.tenantId,
+        fixture.userId,
+        source.rows[0].customerId,
+        fixture.quoteNumber,
+      ],
+    );
+    await client.query(
+      `INSERT INTO sales_orders
+         (id, tenant_id, customer_id, owner_user_id, order_number, currency, total_amount,
+          source_quote_id, source_quote_version, source_quote_number, source_quote_snapshot,
+          source_quote_idempotency_key)
+       VALUES ($1,$2,$3,$4,$5,'USD',1,$6,1,$7,$8::jsonb,$9)`,
+      [
+        fixture.salesOrderId,
+        fixture.tenantId,
+        source.rows[0].customerId,
+        fixture.userId,
+        `SO-MIG-054-${suffix.slice(0, 8)}`,
+        fixture.documentSetId,
+        fixture.quoteNumber,
+        JSON.stringify({ source: 'main-054', preserved: true }),
+        fixture.idempotencyKey,
+      ],
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return fixture;
+}
+
+async function removeMainStageAFixture(pool: Pool, fixture: MainStageAFixture): Promise<void> {
+  await pool.query('DELETE FROM sales_orders WHERE id = $1', [fixture.salesOrderId]);
+  await pool.query('DELETE FROM trade_document_sets WHERE id = $1', [fixture.documentSetId]);
+}
+
+async function assertMainStageAUpgrade(pool: Pool, fixture: MainStageAFixture): Promise<void> {
+  const result = await pool.query<{
+    sourceDocumentSetId: string;
+    quoteNumber: string;
+    quoteVersion: number;
+    snapshot: Record<string, unknown>;
+    idempotencyKey: string;
+    convertedBy: string;
+    convertedAt: string;
+  }>(
+    `SELECT source_document_set_id AS "sourceDocumentSetId",
+            source_quote_number AS "quoteNumber",
+            source_quote_version AS "quoteVersion",
+            source_quote_snapshot AS snapshot,
+            source_quote_idempotency_key AS "idempotencyKey",
+            source_quote_converted_by AS "convertedBy",
+            source_quote_converted_at::text AS "convertedAt"
+       FROM sales_orders
+      WHERE id = $1`,
+    [fixture.salesOrderId],
+  );
+  const order = result.rows[0];
+  if (
+    !order ||
+    order.sourceDocumentSetId !== fixture.documentSetId ||
+    order.quoteNumber !== fixture.quoteNumber ||
+    order.quoteVersion !== 1 ||
+    order.idempotencyKey !== fixture.idempotencyKey ||
+    order.convertedBy !== fixture.userId ||
+    !order.convertedAt ||
+    order.snapshot.source !== 'main-054' ||
+    order.snapshot.preserved !== true
+  ) {
+    throw new Error('Main 054 quote source data was not preserved by the compatibility upgrade.');
+  }
+}
+
+async function rehearseMainStageAUpgrade(pool: Pool): Promise<void> {
+  if ((await latestMigration(pool)) !== CURRENT_RELEASE_MIGRATION) {
+    throw new Error(`Main 054 upgrade rehearsal must start at ${CURRENT_RELEASE_MIGRATION}.`);
+  }
+  while ((await latestMigration(pool)) !== MAIN_STAGE_A_MIGRATION) {
+    await rollback();
+  }
+
+  const beforeLedger = await historicalLedger(pool, MAIN_STAGE_A_MIGRATION);
+  const published = beforeLedger.find((row) => row.filename === MAIN_STAGE_A_MIGRATION);
+  if (published?.checksum !== MAIN_STAGE_A_CHECKSUM) {
+    throw new Error(
+      `${MAIN_STAGE_A_MIGRATION} checksum is ${published?.checksum ?? '<missing>'}; ` +
+        `expected published checksum ${MAIN_STAGE_A_CHECKSUM}.`,
+    );
+  }
+
+  const fixture = await createMainStageAFixture(pool);
+  try {
+    await migrate();
+    const afterLedger = await historicalLedger(pool, MAIN_STAGE_A_MIGRATION);
+    if (JSON.stringify(afterLedger) !== JSON.stringify(beforeLedger)) {
+      throw new Error('Forward migration modified the main 054 _migrations history.');
+    }
+    if ((await latestMigration(pool)) !== CURRENT_RELEASE_MIGRATION) {
+      throw new Error(`Main 054 upgrade did not reach ${CURRENT_RELEASE_MIGRATION}.`);
+    }
+    await assertMainStageAUpgrade(pool, fixture);
+  } finally {
+    await removeMainStageAFixture(pool, fixture);
+  }
+
+  console.log(
+    `Main forward migration passed: immutable ${MAIN_STAGE_A_MIGRATION}, quote source data preserved`,
+  );
 }
 
 async function createLegacyRoleFixtures(pool: Pool): Promise<RoleFixture> {
@@ -230,6 +393,7 @@ async function rehearse(): Promise<void> {
   }
 
   console.log(`Migration round-trip passed: ${rehearsed.map((row) => row.filename).join(', ')}`);
+  await rehearseMainStageAUpgrade(pool);
   await rehearseLegacyUpgrade(pool);
 }
 
