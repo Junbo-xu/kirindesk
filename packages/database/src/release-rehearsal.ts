@@ -15,6 +15,7 @@ const BASELINE_MIGRATION = '049_stage_2e_finance_profit_commission.sql';
 const RELEASE_MIGRATION = '057_customs_declarations.sql';
 const BASELINE_SOURCE_FILTERS: Record<string, string> = {
   finance_review_items: `subject_type <> 'after_sales_adjustment'`,
+  sales_order_purchase_orders: 'procurement_request_id IS NOT NULL',
 };
 const RELEASE_PERMISSION_CODES = [
   'products:view',
